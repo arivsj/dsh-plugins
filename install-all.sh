@@ -6,6 +6,7 @@
 #   ./install-all.sh --only voice-input
 #   ./install-all.sh --skip ollama-vision
 #   VOICE_PRELOAD=1 ./install-all.sh # tambem baixa o modelo do Whisper
+#   ./install-all.sh --no-rule       # nao escreve a regra no arquivo do agente
 #   DSH_HOME=/caminho ./install-all.sh
 #
 # Cada plugin tem o proprio install.sh (idempotente); este script so orquestra.
@@ -21,6 +22,7 @@ while [ $# -gt 0 ]; do
     --list) printf '%s\n' "$(find "$SRC" -maxdepth 2 -name install.sh -not -path "$SRC/*/*/*" 2>/dev/null | sed "s|$SRC/||; s|/install.sh||" | sort)"; exit 0 ;;
     --only) ONLY="${2:-}"; shift 2 ;;
     --skip) SKIP="${2:-}"; shift 2 ;;
+    --no-rule) INSTALL_AGENT_RULE=0; shift ;;
     -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "opcao desconhecida: $1" >&2; exit 2 ;;
   esac
@@ -48,5 +50,11 @@ for name in "${plugins[@]}"; do
   bash "$SRC/$name/install.sh"
   echo
 done
+
+if [ "${INSTALL_AGENT_RULE:-1}" = "1" ]; then
+  echo "=================== regra do agente ==================="
+  bash "$SRC/install-agent-rule.sh"
+  echo
+fi
 
 echo "Concluido. Recarregue a pagina do harness (F5) e confira com ./doctor.sh"

@@ -148,15 +148,30 @@ Passo a passo para outra máquina, backup e troca de sistema operacional:
 
 ## Regra de comportamento do agente
 
-Existe uma regra global do usuário (fora deste repositório) em **`~/.dsh/AGENTS.md`**,
-carregada pelo Harness em todas as sessões e projetos. Ela determina que:
+Este repositório **não versiona nada do Harness**. Ele guarda o **texto** da regra
+em [`docs/regra-plugins.md`](docs/regra-plugins.md) e um instalador que a escreve no
+arquivo de instruções que o Harness **instalado no momento** estiver usando — hoje
+`$DSH_HOME/AGENTS.md`, mas o nome não é chumbado: o script descobre a cada execução
+lendo o próprio DSH (`@deepseek-ai/dsh-agent-instructions`). Se o Harness mudar esse
+mecanismo, só a descoberta no script precisa de ajuste; o texto da regra continua igual.
 
-- todo plugin novo é criado **aqui**, em `~/dsh-plugins/<nome>/`, nunca dentro de um projeto;
-- a instalação é sempre global (farm compartilhado + `~/.dsh/cordis.patch.yml`);
-- o agente **pergunta antes** de rodar `git add`/`commit`/`push`, mostrando arquivos e mensagem.
+```bash
+./install-agent-rule.sh            # cria/atualiza a regra no arquivo do agente
+./install-agent-rule.sh --check    # só verifica (usado pelo doctor.sh)
+./install-agent-rule.sh --dry-run  # mostra o que seria escrito
+./install-agent-rule.sh --remove   # tira a regra do arquivo do agente
+AGENT_RULE_FILE=/caminho ./install-agent-rule.sh   # força outro arquivo alvo
+```
 
-Se você mudar de máquina, esse arquivo precisa ser recriado (ele não faz parte deste repo);
-o conteúdo é o mesmo descrito acima.
+O bloco instalado fica entre `<!-- dsh-plugins:regra:inicio -->` e
+`<!-- dsh-plugins:regra:fim -->`: rodar de novo **atualiza** a regra em vez de
+duplicar, e nada mais do arquivo é tocado. O `install-all.sh` aplica a regra ao
+final (pule com `--no-rule`) e o `doctor.sh` avisa quando ela estiver ausente.
+
+Em resumo, a regra diz: todo plugin novo nasce em `~/dsh-plugins/<nome>/`, a
+instalação é sempre global (farm compartilhado + camada do usuário) e **o agente
+pergunta antes de qualquer `git add`/`commit`/`push`**, mostrando os arquivos e a
+mensagem sugerida.
 ## Licença
 
 MIT, como os próprios plugins.

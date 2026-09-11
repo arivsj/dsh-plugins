@@ -70,6 +70,20 @@ fi
 if [ -d "$FARM/dsh-ollama-vision" ]; then ok "pacote no farm compartilhado (todos os perfis)"; else bad "pacote ausente em $FARM/dsh-ollama-vision"; fi
 if [ -f "$HOME_PATCH" ] && grep -q "ollama-vision" "$HOME_PATCH"; then ok "entry ollama-vision na camada do usuario"; else bad "entry ollama-vision ausente em $HOME_PATCH"; fi
 
+section "Regra do agente (plugins em ~/dsh-plugins)"
+if [ -x "$SRC/install-agent-rule.sh" ]; then
+  alvo_regra="$(bash "$SRC/install-agent-rule.sh" --print 2>/dev/null || true)"
+  if [ -z "$alvo_regra" ]; then
+    warn "nao consegui descobrir o arquivo de instrucoes do agente instalado"
+  elif bash "$SRC/install-agent-rule.sh" --check >/dev/null 2>&1; then
+    ok "regra dos plugins presente em $alvo_regra"
+  else
+    bad "regra ausente em $alvo_regra — rode ./install-agent-rule.sh"
+  fi
+else
+  warn "install-agent-rule.sh nao encontrado neste repositorio"
+fi
+
 printf '\n'
 if [ "$problems" -eq 0 ]; then
   echo "Tudo certo: nenhum problema bloqueante encontrado."
