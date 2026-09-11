@@ -146,6 +146,17 @@ baixados do HuggingFace na primeira transcrição (ou com `VOICE_PRELOAD=1`).
 Passo a passo para outra máquina, backup e troca de sistema operacional:
 [docs/portabilidade.md](docs/portabilidade.md).
 
+## Regra de comportamento do agente
+
+Existe uma regra global do usuário (fora deste repositório) em **`~/.dsh/AGENTS.md`**,
+carregada pelo Harness em todas as sessões e projetos. Ela determina que:
+
+- todo plugin novo é criado **aqui**, em `~/dsh-plugins/<nome>/`, nunca dentro de um projeto;
+- a instalação é sempre global (farm compartilhado + `~/.dsh/cordis.patch.yml`);
+- o agente **pergunta antes** de rodar `git add`/`commit`/`push`, mostrando arquivos e mensagem.
+
+Se você mudar de máquina, esse arquivo precisa ser recriado (ele não faz parte deste repo);
+o conteúdo é o mesmo descrito acima.
 ## Licença
 
 MIT, como os próprios plugins.
