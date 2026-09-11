@@ -113,3 +113,18 @@ rodar `install.sh` outra vez.
   harness executa a cópia instalada, não o repositório.
 - Se quiser versionar também os modelos (para reinstalar offline), use
   `git lfs` ou guarde o `.tgz` da opção 3 no backup.
+
+## Por que isso vale para todos os repositórios
+
+A instalação é feita no **harness**, não no projeto: os pacotes vão para
+`~/.dsh/profiles/node_modules/` e as entries para `~/.dsh/cordis.patch.yml` (a
+camada do usuário, aplicada sobre o patch de cada perfil). Resultado: qualquer
+workspace aberto no harness — o de hoje e os de amanhã — tem o microfone no
+composer e as ferramentas de visão, sem nenhuma configuração por projeto.
+
+Para conferir depois de reinstalar:
+
+```bash
+dsh --profile web --dump-config | grep -c 'id: voice-input'        # 1
+dsh --profile headless --dump-config | grep -c 'id: ollama-vision' # 1
+```

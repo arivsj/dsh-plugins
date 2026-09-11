@@ -193,3 +193,62 @@ sessão. Nos slots de entrada do composer (`InputZone`):
 
 O harness lê esse perfil no boot e observa o `cordis.patch.yml` em tempo de
 execução — daí o F5 em vez de reiniciar.
+
+## 11. Perfis, camada do usuário e dependências opcionais
+
+O DSH compõe a árvore de plugins em camadas, nesta ordem:
+
+```
+bundles do perfil (dsh.profile.bundles)
+  → ~/.dsh/profiles/<perfil>/cordis.patch.yml   (camada do perfil)
+  → ~/.dsh/cordis.patch.yml                     (camada do USUÁRIO: todo perfil)
+  → overlays --patch                            (por invocação)
+  → patches derivados de flags (ex.: telemetria)
+```
+
+A camada do usuário é o lugar certo para um plugin que deve existir em
+**todos** os perfis — é a definição dela no código do DSH: *machine-local
+preferences that apply to every profile, so it outranks the per-profile layer*.
+
+Duas consequências que não são óbvias:
+
+1. **Id repetido entre camadas é fatal**: o Loader lança
+   `duplicate loader entry id: <id>`. Ao mover um plugin da camada do perfil para
+   a do usuário, remova a entrada antiga — e evite deixar as duas visíveis ao
+   mesmo tempo (o watcher aplica cada estado intermediário).
+2. **Serviço exclusivo de um perfil não pode ser dependência obrigatória**: no
+   fim do boot o DSH audita a árvore (`assertEntriesActivated`) e **derruba o
+   processo** se alguma entry ficou pendente esperando serviço. Perfis headless,
+   por exemplo, têm `tools` e `systemPrompt`, mas **não** têm `webServer`.
+
+Para depender de algo opcional, use o idioma do cordis:
+
+```js
+const inject = []                       // ativa em qualquer perfil
+function apply(ctx, config) {
+  ctx.inject(['webServer'], (scope) => {   // roda quando (e se) existir
+    scope.effect(() => scope.webServer.register({ kind: 'exact', path: '/x', handler }), 'rota')
+  })
+}
+```
+
+E deixe o trabalho pesado (workers, timers, warmup) **dentro** desse callback:
+em um perfil sem o serviço o plugin não gasta recurso nenhum.
+
+### Resolver o nome do pacote em qualquer perfil
+
+Entry com nome *bare* (`name: 'dsh-voice-input'`) é resolvida a partir do
+diretório do perfil, subindo a árvore de `node_modules`. Por isso o pacote é
+instalado em `~/.dsh/profiles/node_modules/` — o farm compartilhado que o próprio
+DSH mantém (`healProfilesModuleFallback`) — e não em `profiles/web/node_modules`,
+que só serve ao perfil web.
+
+### Verificar a composição sem subir o harness
+
+```bash
+dsh --profile web --dump-config       | grep -A3 'id: voice-input'
+dsh --profile headless --dump-config  | grep -A3 'id: voice-input'
+```
+
+Em um `DSH_HOME` de teste (por exemplo `DSH_HOME=/tmp/fh`) dá para conferir a
+composição de perfis que ainda nem existem na sua máquina.

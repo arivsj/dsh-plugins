@@ -84,23 +84,38 @@ dsh-plugins/
     └── .dev/                    # self-test
 ```
 
-## Como cada plugin entra no harness
+## Onde os plugins ficam (e por que valem para tudo)
 
-1. O `install.sh` do plugin **copia** o código para dentro do perfil web
-   (`~/.dsh/profiles/web/`) — o harness executa essa cópia, não o repositório.
-   - plugin **host-only** (ollama-vision): vai para `profiles/web/plugins/<nome>/`
-     e a entry aponta para o caminho relativo do arquivo.
-   - plugin **dual-face** (voice-input): precisa ser um **pacote** em
-     `profiles/web/node_modules/` porque o navegador recebe a metade cliente
-     resolvendo `require.resolve('<nome-do-pacote>/package.json')`.
-2. O instalador acrescenta (ou atualiza) a entry em
-   `~/.dsh/profiles/web/cordis.patch.yml`, que é o arquivo de patches do perfil.
-3. O perfil recarrega esse arquivo a quente; o navegador só conhece o novo
-   plugin depois de um **F5**.
+Os plugins são instalados no **harness**, não em um projeto: valem para todos
+os workspaces/repositórios que você abrir agora e no futuro, e para todos os
+perfis do DSH (web, headless e os que vierem).
 
-O contrato completo (formato da entry, do bundle cliente, slots disponíveis,
-rotas e armadilhas) está em [docs/contrato-plugins-dsh.md](docs/contrato-plugins-dsh.md).
+1. O `install.sh` de cada plugin copia o código para **dois** lugares:
+   - `~/.dsh/profiles/node_modules/<pacote>/` — farm de módulos compartilhado por
+     **todos os perfis**; é o que faz o nome do pacote resolver em qualquer perfil;
+   - `~/.dsh/profiles/web/node_modules/dsh-voice-input/` — cópia extra para o
+     processo web **já em execução** (o DSH guarda o caminho do bundle cliente em
+     cache por processo, então essa cópia evita 404 até o próximo F5).
+2. A entry vai para `~/.dsh/cordis.patch.yml` — a **camada do usuário**, que o DSH
+   aplica *sobre* o patch de cada perfil: *machine-local preferences that apply
+   to every profile*. É isso que torna o plugin global de verdade.
+3. O perfil recarrega essa camada a quente; o navegador só conhece o plugin novo
+   depois de um **F5**.
 
+Duas regras vindas disso, úteis ao criar plugins novos:
+
+- **Nunca** declare um serviço exclusivo do perfil web como dependência
+  obrigatória (`inject: ['webServer']`, por exemplo). Em um perfil sem esse
+  serviço a entry fica *pendente* e o boot do harness **falha** (o audit
+  `assertEntriesActivated` derruba o processo). Use `ctx.inject(['webServer'], cb)`
+  — dependência opcional: o plugin ativa em qualquer perfil e só registra as
+  rotas onde existe webserver. É assim que o `voice-input` está escrito.
+- **Nunca** duplique o `id` da entry entre camadas: ids repetidos fazem o Loader
+  lançar `duplicate loader entry id`. Para mover um plugin de camada, remova a
+  entrada antiga e escreva a nova (os instaladores fazem isso sozinhos).
+
+O contrato completo (formato da entry, bundle cliente, slots, rotas e
+armadilhas) está em [docs/contrato-plugins-dsh.md](docs/contrato-plugins-dsh.md).
 ## Verificação
 
 ```bash

@@ -1,28 +1,40 @@
 #!/usr/bin/env bash
-# Instala o plugin voice-input no perfil web do DSH e o registra no cordis.patch.yml.
+# Instala o plugin voice-input para TODO o harness — todos os perfis (web,
+# headless e os que vierem) e, portanto, todos os workspaces/repositórios.
 #
-#   ./install.sh                 # instala/atualiza (baixa o vendor se faltar)
-#   VOICE_PRELOAD=1 ./install.sh # instala e ja baixa o modelo do Whisper
+#   ./install.sh                 # instala/atualiza
+#   VOICE_PRELOAD=1 ./install.sh # tambem baixa o modelo do Whisper
 #   DSH_HOME=/caminho ./install.sh
 #
-# A metade cliente precisa ser um PACOTE resolvivel pelo perfil (o DSH resolve
-# o bundle por require.resolve('<nome>/package.json')), por isso a copia vai
-# para <perfil>/node_modules/dsh-voice-input e a entry usa o nome do pacote.
+# Onde cada coisa vai:
+#   $DSH_HOME/cordis.patch.yml            camada do USUARIO: a entry vive aqui e vale
+#                                         para todo perfil (recomposicao a quente)
+#   $DSH_HOME/profiles/node_modules/      farm compartilhado: o pacote fica aqui, entao
+#     dsh-voice-input                     qualquer perfil resolve o nome 'dsh-voice-input'
+#   $DSH_HOME/profiles/web/node_modules/  copia extra para o processo web JA em execucao
+#     dsh-voice-input                     (o DSH guarda o caminho do bundle cliente em
+#                                         cache por processo; a copia evita 404 ate o F5)
+#   $DSH_HOME/profiles/web/cordis.patch.yml   entrada legada e removida (migracao)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DSH_DIR="${DSH_HOME:-$HOME/.dsh}"
-PROFILE="$DSH_DIR/profiles/web"
-DEST="$PROFILE/node_modules/dsh-voice-input"
-PATCH="$PROFILE/cordis.patch.yml"
+FARM="$DSH_DIR/profiles/node_modules"
+WEB="$DSH_DIR/profiles/web"
+HOME_PATCH="$DSH_DIR/cordis.patch.yml"
+WEB_PATCH="$WEB/cordis.patch.yml"
 
-echo "origem : $SRC"
-echo "destino: $DEST"
+echo "origem   : $SRC"
+echo "pacote   : $FARM/dsh-voice-input  (todos os perfis)"
+echo "copia web: $WEB/node_modules/dsh-voice-input (processo em execucao)"
+echo "entry    : $HOME_PATCH (camada do usuario)"
 
-mkdir -p "$DEST/lib"
-install -m 0644 "$SRC/package.json" "$DEST/package.json"
-install -m 0644 "$SRC/lib/index.js" "$DEST/lib/index.js"
-install -m 0644 "$SRC/lib/client.js" "$DEST/lib/client.js"
+for dest in "$FARM/dsh-voice-input" "$WEB/node_modules/dsh-voice-input"; do
+  mkdir -p "$dest/lib"
+  install -m 0644 "$SRC/package.json" "$dest/package.json"
+  install -m 0644 "$SRC/lib/index.js" "$dest/lib/index.js"
+  install -m 0644 "$SRC/lib/client.js" "$dest/lib/client.js"
+done
 echo "pacote copiado"
 
 if [ ! -d "$SRC/vendor/faster_whisper" ]; then
@@ -34,17 +46,60 @@ fi
 
 mkdir -p "$SRC/models"
 
-python3 - "$PATCH" "$SRC" <<'PY'
+python3 - "$HOME_PATCH" "$WEB_PATCH" "$SRC" <<'PY'
 import pathlib
 import re
 import sys
 
-patch = pathlib.Path(sys.argv[1])
-src = sys.argv[2]
-patch.parent.mkdir(parents=True, exist_ok=True)
-text = patch.read_text() if patch.exists() else '[]'
 
-entry = (
+def localizar(texto, alvo):
+    """Faixa do bloco '- insert:' que contem '- id: <alvo>' (linhas, inicio, fim)."""
+    linhas = texto.splitlines()
+    for indice, linha in enumerate(linhas):
+        if linha.strip() == '- id: ' + alvo:
+            inicio = None
+            for volta in range(indice, -1, -1):
+                if linhas[volta].rstrip() == '- insert:':
+                    inicio = volta
+                    break
+            if inicio is None:
+                return None
+            fim = len(linhas)
+            for avanco in range(indice + 1, len(linhas)):
+                if linhas[avanco].rstrip() == '- insert:':
+                    fim = avanco
+                    break
+            return linhas, inicio, fim
+    return None
+
+
+def remover(texto, alvo):
+    faixa = localizar(texto, alvo)
+    if faixa is None:
+        return texto, False
+    linhas, inicio, fim = faixa
+    del linhas[inicio:fim]
+    return '\n'.join(linhas).rstrip('\n') + '\n', True
+
+
+def gravar(texto, alvo, bloco):
+    faixa = localizar(texto, alvo)
+    novas = bloco.rstrip('\n').split('\n')
+    if faixa is not None:
+        linhas, inicio, fim = faixa
+        linhas[inicio:fim] = novas
+        return '\n'.join(linhas).rstrip('\n') + '\n', 'atualizada'
+    limpo = re.sub(r'(?m)^\s*#.*$', '', texto).strip()
+    if limpo in ('[]', ''):
+        return bloco, 'criada'
+    return limpo.rstrip('\n') + '\n' + bloco, 'acrescentada'
+
+
+patch_home = pathlib.Path(sys.argv[1])
+patch_web = pathlib.Path(sys.argv[2])
+src = sys.argv[3]
+
+bloco = (
     "- insert:\n"
     "    - id: voice-input\n"
     "      name: 'dsh-voice-input'\n"
@@ -58,36 +113,18 @@ entry = (
     "        warmupOnStart: true\n"
 )
 
-entry_lines = entry.rstrip('\n').split('\n')
+patch_home.parent.mkdir(parents=True, exist_ok=True)
+texto = patch_home.read_text() if patch_home.exists() else '[]'
+novo, estado = gravar(texto, 'voice-input', bloco)
+patch_home.write_text(novo)
+print('camada do usuario: entrada voice-input ' + estado)
 
-# A entry aponta para caminhos absolutos deste repositorio: se a pasta mudar de
-# lugar, o bloco antigo precisa ser REESCRITO, nao apenas ignorado.
-lines = text.splitlines()
-start = None
-end = len(lines)
-for index, line in enumerate(lines):
-    if line.strip() == '- id: voice-input':
-        for back in range(index, -1, -1):
-            if lines[back].rstrip() == '- insert:':
-                start = back
-                break
-        for forward in range(index + 1, len(lines)):
-            if lines[forward].rstrip() == '- insert:':
-                end = forward
-                break
-        break
-
-stripped = re.sub(r'(?m)^\s*#.*$', '', text).strip()
-if start is not None:
-    lines[start:end] = entry_lines
-    patch.write_text('\n'.join(lines).rstrip('\n') + '\n')
-    print('cordis.patch.yml: entrada voice-input atualizada (caminhos deste repositorio)')
-elif stripped in ('[]', ''):
-    patch.write_text(entry)
-    print('cordis.patch.yml: entrada voice-input criada')
-else:
-    patch.write_text(stripped.rstrip() + '\n' + entry)
-    print('cordis.patch.yml: entrada voice-input acrescentada')
+if patch_web.exists():
+    texto = patch_web.read_text()
+    novo, removido = remover(texto, 'voice-input')
+    if removido:
+        patch_web.write_text(novo)
+        print('perfil web: entrada legada voice-input removida')
 PY
 
 if [ "${VOICE_PRELOAD:-0}" = "1" ]; then
@@ -96,6 +133,6 @@ if [ "${VOICE_PRELOAD:-0}" = "1" ]; then
 fi
 
 echo
-echo "Pronto. Recarregue a pagina do harness (F5): o perfil aplica o cordis.patch.yml"
-echo "a quente, entao nao e preciso reiniciar o dsh web (so se o package.json do"
-echo "plugin mudar). Diagnostico:  curl -s http://127.0.0.1:3080/voice-input/status"
+echo "Pronto. A entry vive na camada do usuario, entao vale para todos os perfis e"
+echo "todos os workspaces. Recarregue a pagina do harness (F5). Diagnostico:"
+echo "  curl -s http://127.0.0.1:3080/voice-input/status"

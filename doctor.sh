@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Verifica os pre-requisitos dos plugins deste repositorio e o estado do perfil
-# web do DSH. Somente leitura: nao instala nem altera nada.
+# Verifica os pre-requisitos dos plugins deste repositorio e o estado da
+# instalacao GLOBAL (camada do usuario + farm de modulos compartilhado).
+# Somente leitura: nao instala nem altera nada.
 #
 #   ./doctor.sh
 #   DSH_HOME=/caminho ./doctor.sh
@@ -8,8 +9,11 @@ set -uo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DSH_DIR="${DSH_HOME:-$HOME/.dsh}"
-PROFILE="$DSH_DIR/profiles/web"
-PATCH="$PROFILE/cordis.patch.yml"
+PROFILES="$DSH_DIR/profiles"
+FARM="$PROFILES/node_modules"
+WEB="$PROFILES/web"
+HOME_PATCH="$DSH_DIR/cordis.patch.yml"
+WEB_PATCH="$WEB/cordis.patch.yml"
 WEB_URL="${DSH_WEB_URL:-http://127.0.0.1:3080}"
 
 problems=0
@@ -21,14 +25,21 @@ section() { printf '\n%s\n' "$1"; }
 
 section "Base do harness"
 if have dsh; then ok "dsh: $(dsh --version 2>/dev/null | head -1)"; else bad "comando 'dsh' nao encontrado no PATH (npm i -g @deepseek-ai/dsh)"; fi
-if [ -d "$PROFILE" ]; then ok "perfil web: $PROFILE"; else bad "perfil web ausente: $PROFILE (rode 'dsh web' uma vez)"; fi
-if touch "$PROFILE/.doctor-write-test" 2>/dev/null; then
-  rm -f "$PROFILE/.doctor-write-test"
-  ok "perfil gravavel"
+if [ -d "$PROFILES" ]; then ok "perfis: $PROFILES"; else bad "pasta de perfis ausente: $PROFILES (rode 'dsh web' uma vez)"; fi
+if touch "$DSH_DIR/.doctor-write-test" 2>/dev/null; then
+  rm -f "$DSH_DIR/.doctor-write-test"
+  ok "DSH_HOME gravavel"
 else
-  warn "nao consegui escrever em $PROFILE — rode o install.sh no terminal normal do usuario (sandbox de escrita tambem bloqueia esta checagem)"
+  warn "nao consegui escrever em $DSH_DIR — rode o install.sh no terminal normal do usuario (sandbox de escrita tambem bloqueia esta checagem)"
 fi
-if [ -f "$PATCH" ]; then ok "cordis.patch.yml presente"; else warn "cordis.patch.yml ainda nao existe (sera criado pelo install.sh)"; fi
+if [ -f "$HOME_PATCH" ]; then
+  ok "camada do usuario: $HOME_PATCH (vale para todos os perfis)"
+else
+  warn "camada do usuario ainda nao existe: $HOME_PATCH (o install.sh cria)"
+fi
+if [ -f "$WEB_PATCH" ] && grep -qE "voice-input|ollama-vision" "$WEB_PATCH"; then
+  warn "o perfil web ainda tem entrada legada em $WEB_PATCH (rode o install.sh para migrar)"
+fi
 if curl -s --max-time 3 -o /dev/null "$WEB_URL"; then ok "harness respondendo em $WEB_URL"; else warn "harness nao responde em $WEB_URL (rode 'dsh web' para testar as rotas)"; fi
 
 section "voice-input (microfone + Whisper local)"
@@ -40,8 +51,9 @@ if [ -d "$SRC/voice-input/models" ] && [ -n "$(ls -A "$SRC/voice-input/models" 2
 else
   warn "nenhum modelo Whisper baixado ainda (baixa sozinho na primeira transcricao)"
 fi
-if [ -d "$PROFILE/node_modules/dsh-voice-input" ]; then ok "pacote instalado no perfil"; else bad "pacote ausente em $PROFILE/node_modules/dsh-voice-input"; fi
-if [ -f "$PATCH" ] && grep -q "voice-input" "$PATCH"; then ok "entry voice-input no cordis.patch.yml"; else bad "entry voice-input ausente no cordis.patch.yml"; fi
+if [ -d "$FARM/dsh-voice-input" ]; then ok "pacote no farm compartilhado (todos os perfis)"; else bad "pacote ausente em $FARM/dsh-voice-input"; fi
+if [ -d "$WEB/node_modules/dsh-voice-input" ]; then ok "copia do perfil web (processo em execucao)"; else warn "sem copia em $WEB/node_modules (novo F5 resolve pelo farm; copie com o install.sh se o botao sumir)"; fi
+if [ -f "$HOME_PATCH" ] && grep -q "voice-input" "$HOME_PATCH"; then ok "entry voice-input na camada do usuario"; else bad "entry voice-input ausente em $HOME_PATCH"; fi
 if curl -s --max-time 3 "$WEB_URL/voice-input/status" >/dev/null 2>&1; then ok "rota /voice-input/status respondendo"; else warn "rota ainda nao responde (harness parado ou plugin nao carregado)"; fi
 if have google-chrome || have chromium || have firefox; then ok "navegador com microfone (getUserMedia exige 127.0.0.1 ou https)"; else warn "nenhum navegador encontrado para usar o botao"; fi
 
@@ -55,8 +67,8 @@ elif have ollama && ollama list 2>/dev/null | grep -q "gemma4"; then
 else
   warn "modelo de visao gemma4:e2b ausente (ollama pull gemma4:e2b, ~7,2 GB)"
 fi
-if [ -d "$PROFILE/plugins/ollama-vision" ]; then ok "plugin instalado no perfil"; else bad "copia ausente em $PROFILE/plugins/ollama-vision"; fi
-if [ -f "$PATCH" ] && grep -q "ollama-vision" "$PATCH"; then ok "entry ollama-vision no cordis.patch.yml"; else bad "entry ollama-vision ausente no cordis.patch.yml"; fi
+if [ -d "$FARM/dsh-ollama-vision" ]; then ok "pacote no farm compartilhado (todos os perfis)"; else bad "pacote ausente em $FARM/dsh-ollama-vision"; fi
+if [ -f "$HOME_PATCH" ] && grep -q "ollama-vision" "$HOME_PATCH"; then ok "entry ollama-vision na camada do usuario"; else bad "entry ollama-vision ausente em $HOME_PATCH"; fi
 
 printf '\n'
 if [ "$problems" -eq 0 ]; then

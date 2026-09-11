@@ -129,3 +129,16 @@ próprio DSH — não há nada para instalar em npm.
 4. As entries em `~/.dsh/profiles/web/cordis.patch.yml` — o `install-all.sh` as
    recria; se você personalizou configs (modelo, portas), copie esse arquivo
    também (veja [docs/portabilidade.md](docs/portabilidade.md)).
+
+## Onde a instalação vive (global por desenho)
+
+| caminho | conteúdo | vale para |
+|---|---|---|
+| `~/.dsh/cordis.patch.yml` | as entries dos dois plugins (camada do usuário) | **todos os perfis e workspaces** |
+| `~/.dsh/profiles/node_modules/dsh-voice-input/` | pacote dual-face (host + bundle cliente) | todos os perfis |
+| `~/.dsh/profiles/node_modules/dsh-ollama-vision/` | plugin host-only | todos os perfis |
+| `~/.dsh/profiles/web/node_modules/dsh-voice-input/` | cópia para o processo web em execução | perfil web |
+| `~/dsh-plugins/` | código-fonte, instaladores, docs e modelos/vendor | — |
+
+Nada é instalado dentro de um projeto/repositório: abrir outra pasta no harness
+não muda nada, os plugins já estão lá.

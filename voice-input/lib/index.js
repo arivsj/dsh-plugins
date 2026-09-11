@@ -26,7 +26,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const name = 'voice-input'
-const inject = ['webServer']
+// Sem dependencia obrigatoria: assim o plugin ATIVA em qualquer perfil (web,
+// headless, futuros). As rotas entram no bloco ctx.inject abaixo, que so roda
+// onde existir um webserver — declarar 'webServer' aqui deixaria a entry pendente
+// em perfis sem HTTP e o boot do harness falha nesse caso.
+const inject = []
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -417,28 +421,36 @@ function apply(ctx, config) {
     sendJson(res, 200, { ok: true, ...status })
   }
 
-  ctx.effect(
-    () => ctx.webServer.register({ kind: 'exact', path: cfg.route, handler: handleTranscribe }),
-    'voice-input: rota de transcricao',
-  )
-  ctx.effect(
-    () => ctx.webServer.register({ kind: 'exact', path: cfg.statusRoute, handler: handleStatus }),
-    'voice-input: rota de diagnostico',
-  )
-  ctx.effect(() => () => engine.stop(), 'voice-input: worker de transcricao')
-
-  if (cfg.modelDir) {
-    mkdir(cfg.modelDir, { recursive: true }).catch((error) => log('nao criou modelDir:', error.message))
+  if (ctx.get('webServer') === undefined) {
+    log('este perfil nao tem webserver: nada a registrar aqui (o plugin fica inativo)')
   }
 
-  if (cfg.warmupOnStart) {
-    const timer = setTimeout(() => {
-      engine.warmup().catch((error) => log('warmup falhou:', error.message))
-    }, Math.max(0, cfg.warmupDelayMs))
-    timer.unref?.()
-  }
+  // Dependencia OPCIONAL: o callback roda quando (e se) existir um webserver. Rota,
+  // worker e warmup vivem aqui dentro, entao um perfil sem HTTP nao gasta nada.
+  ctx.inject(['webServer'], (scope) => {
+    scope.effect(
+      () => scope.webServer.register({ kind: 'exact', path: cfg.route, handler: handleTranscribe }),
+      'voice-input: rota de transcricao',
+    )
+    scope.effect(
+      () => scope.webServer.register({ kind: 'exact', path: cfg.statusRoute, handler: handleStatus }),
+      'voice-input: rota de diagnostico',
+    )
+    scope.effect(() => () => engine.stop(), 'voice-input: worker de transcricao')
 
-  log('plugin carregado; rota', cfg.route, '| modelo', cfg.model, '| idioma', cfg.language)
+    if (cfg.modelDir) {
+      mkdir(cfg.modelDir, { recursive: true }).catch((error) => log('nao criou modelDir:', error.message))
+    }
+
+    if (cfg.warmupOnStart) {
+      const timer = setTimeout(() => {
+        engine.warmup().catch((error) => log('warmup falhou:', error.message))
+      }, Math.max(0, cfg.warmupDelayMs))
+      timer.unref?.()
+    }
+
+    log('rotas prontas', cfg.route, '| modelo', cfg.model, '| idioma', cfg.language)
+  })
 }
 
 export { Config, apply, inject, name }
