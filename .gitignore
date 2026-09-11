@@ -1,0 +1,17 @@
+# Nada disso e versionado: sao dependencias baixadas ou artefatos locais.
+# O install.sh de cada plugin recria tudo (pip download, modelos, copias no perfil).
+
+node_modules
+vendor/
+models/
+.venv/
+venv/
+
+__pycache__/
+*.pyc
+*.pyo
+
+.dev/tmp/
+.dev/fake-dsh/
+*.log
+.DS_Store

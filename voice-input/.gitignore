@@ -1,0 +1,7 @@
+vendor/
+models/
+__pycache__/
+*.pyc
+.dev/tmp/
+
+node_modules

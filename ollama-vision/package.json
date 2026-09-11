@@ -1,0 +1,9 @@
+{
+  "name": "dsh-ollama-vision",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Local vision for text-only models: vision_ask / vision_warmup tools backed by a local Ollama server (cold-start aware).",
+  "license": "MIT"
+}
