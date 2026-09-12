@@ -1,0 +1,13 @@
+{
+  "name": "dsh-pockethound",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "description": "Ponte do PocketHound: observa as sessoes do DSH, transmite em tempo real o que o agente produz e roteia os pedidos de aprovacao para o celular.",
+  "license": "MIT"
+}

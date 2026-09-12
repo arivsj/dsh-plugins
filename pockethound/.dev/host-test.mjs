@@ -1,0 +1,302 @@
+/**
+ * Teste da metade HOST do plugin com um `ctx` falso.
+ *
+ *   node .dev/host-test.mjs
+ *
+ * O autoteste principal exercita o hub isolado. Este aqui monta o plugin de
+ * verdade — `apply(ctx, config)` — contra um contexto de mentira, e verifica o
+ * que só aparece na fiação: quais eventos ele escuta, como resolve o agente de
+ * uma sessão fria, como o corpus do disco entra na lista, e — o mais importante
+ * — que ele DELEGA quando não há celular.
+ */
+
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+/**
+ * De onde carregar o plugin.
+ *
+ * `lib/index.js` importa `@deepseek-ai/schemastery`, que só resolve a partir do
+ * perfil do harness. Por isso o padrão é a CÓPIA INSTALADA — que, de quebra, é
+ * exatamente o artefato que o harness executa. Se ela não existir, cai no
+ * código do repositório (útil só para checar sintaxe).
+ *
+ * @returns {Promise<object>} os exports do plugin.
+ */
+async function carregarPlugin() {
+  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
+  const instalado = join(dshHome, 'profiles', 'node_modules', 'dsh-pockethound', 'lib', 'index.js')
+  const alvo = existsSync(instalado)
+    ? instalado
+    : join(import.meta.dirname, '..', 'lib', 'index.js')
+  if (!existsSync(instalado)) {
+    console.log('(aviso: usando o código do repositório; rode ./install.sh para testar a cópia instalada)')
+  } else {
+    console.log('plugin sob teste: ' + instalado)
+  }
+  return import(pathToFileURL(alvo).href)
+}
+
+const { apply } = await carregarPlugin()
+
+let passed = 0
+let failed = 0
+
+/**
+ * Registra o resultado de uma verificação.
+ * @param {string} label - o que foi verificado.
+ * @param {boolean} condition - se passou.
+ * @param {unknown} [detail] - contexto em caso de falha.
+ */
+function check(label, condition, detail) {
+  if (condition) { passed += 1; console.log('  ok   ' + label) }
+  else { failed += 1; console.log('  FALHA ' + label + (detail !== undefined ? ' :: ' + JSON.stringify(detail) : '')) }
+}
+
+/**
+ * Espera um pouco.
+ * @param {number} ms - milissegundos.
+ * @returns {Promise<void>} promessa resolvida depois.
+ */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Config completa, como o Loader entregaria. */
+const config = {
+  enabled: true,
+  host: '127.0.0.1',
+  port: 0,
+  statePath: join(mkdtempSync(join(tmpdir(), 'pockethound-host-')), 'bridge.json'),
+  claimApprovals: true,
+  claimQuestions: true,
+  // A config do teste e escrita a mao: o padrao do schemastery NAO passa por
+  // aqui, entao todo campo que muda comportamento precisa estar explicito.
+  shareWithDesktop: true,
+  approvalTimeoutMs: 400,
+  questionTimeoutMs: 400,
+  coalesceMs: 20,
+  replayLimit: 50,
+  registerTools: true,
+  allowResume: true,
+  includeSubagents: true,
+  debug: false,
+}
+
+/** Sessão viva de mentira. */
+const sessaoViva = {
+  id: 'sess-viva',
+  header: { id: 'sess-viva', cwd: '/dev/proj', createdAt: 1000 },
+  events: [{ type: 'user/message', data: { content: [{ type: 'text', text: 'faz o build' }] } }],
+}
+
+/** Agente de mentira que registra o que recebeu. */
+const agente = {
+  id: 'sess-viva',
+  recebido: [],
+  followup(mensagem) { this.recebido.push({ canal: 'followup', mensagem }) },
+  steer(mensagem) { this.recebido.push({ canal: 'steer', mensagem }) },
+  cancel(causa) { this.recebido.push({ canal: 'cancel', causa }) },
+}
+
+const resumidos = []
+const eventos = {}
+const efeitos = []
+
+// Os servicos NAO ficam como propriedade do ctx de proposito: e assim que o
+// plugin os encontra em campo (camada do usuario). O acesso por propriedade vem
+// undefined, e sem o fallback para ctx.get() o /prompt respondia "sessao nao
+// encontrada" para uma sessao viva. Este teste existe para nao voltar.
+const servicos = {
+  agents: {
+    get: (id) => (id === 'sess-viva' ? agente : undefined),
+    resume: async ({ resumeSessionId }) => {
+      resumidos.push(resumeSessionId)
+      if (resumeSessionId !== 'sess-fria') throw new Error('sessão desconhecida')
+      return { agent: { ...agente, id: 'sess-fria', recebido: [] } }
+    },
+  },
+  sessions: { list: () => [sessaoViva] },
+  sessionQuery: {
+    listSessions: async () => [
+      { header: { id: 'sess-viva', cwd: '/dev/proj', createdAt: 1000 }, live: true, persisted: true },
+      { header: { id: 'sess-fria', cwd: '/dev/antigo', createdAt: 500 }, live: false, persisted: true },
+      { header: { id: 'sess-sub', cwd: '/dev/proj', createdAt: 900, origin: 'subagent', delegationDepth: 1 }, live: false, persisted: true },
+    ],
+  },
+  // locate() é a API canônica para descobrir o arquivo da sessão sem montar o
+  // caminho na mão (projectKey + encodeSegment escapam espaço como ~0020).
+  sessionPersistence: {
+    locate: (header) => (header ? { kind: 'jsonl', path: '/home/u/.dsh/sessions/--proj--/' + header.id + '/session.jsonl.zstd' } : undefined),
+  },
+  tools: { register: () => () => {} },
+}
+
+const ctx = {
+  get: (nome) => servicos[nome],
+  on: (nome, handler) => { eventos[nome] = handler; return () => { delete eventos[nome] } },
+  effect: (corpo) => { const d = corpo(); if (typeof d === 'function') efeitos.push(d) },
+  // O escopo do `inject` entrega os servicos COMO PROPRIEDADE (e assim que o
+  // cordis faz); o contexto raiz da camada do usuario nao. Modelar os dois evita
+  // testar uma coisa e valer outra.
+  inject: (_deps, cb) => { cb({ ...servicos, get: (nome) => servicos[nome] }) },
+}
+
+apply(ctx, config)
+await sleep(150)
+
+console.log('fiação do plugin')
+check('escuta session/event', typeof eventos['session/event'] === 'function', Object.keys(eventos))
+check('escuta session/created', typeof eventos['session/created'] === 'function')
+check('escuta approval/request', typeof eventos['approval/request'] === 'function')
+
+console.log('lista de sessões: vivas + corpus do disco')
+const anuncio = JSON.parse(readFileSync(config.statePath, 'utf8'))
+const auth = { Authorization: 'Bearer ' + anuncio.token }
+const base = 'http://127.0.0.1:' + anuncio.port
+
+const lista = await (await fetch(base + '/sessions', { headers: auth })).json()
+const ids = lista.sessions.map((s) => s.id)
+check('a sessão viva aparece', ids.includes('sess-viva'), ids)
+check('a sessão fria do disco aparece', ids.includes('sess-fria'), ids)
+check('a de subagente aparece marcada', lista.sessions.find((s) => s.id === 'sess-sub')?.origin === 'subagent', lista.sessions)
+check('a viva vem primeiro', lista.sessions[0].status === 'live', lista.sessions[0])
+check('a fria traz status cold', lista.sessions.find((s) => s.id === 'sess-fria')?.status === 'cold')
+check('o workspace vem do header', lista.sessions.find((s) => s.id === 'sess-fria')?.workspace === '/dev/antigo')
+check('o caminho do log vem de locate()',
+  /sess-fria\/session\.jsonl\.zstd$/.test(lista.sessions.find((s) => s.id === 'sess-fria')?.logPath ?? ''),
+  lista.sessions.find((s) => s.id === 'sess-fria')?.logPath)
+check('o header NÃO vaza para o celular',
+  lista.sessions.every((s) => !('header' in s)),
+  Object.keys(lista.sessions[0]))
+
+console.log('prompt: sessão viva, sessão fria e sessão inexistente')
+const r1 = await (await fetch(base + '/prompt', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'sess-viva', text: 'roda os testes', mode: 'followup' }),
+})).json()
+check('prompt na sessão viva usa followup', r1.ok === true && agente.recebido.at(-1)?.canal === 'followup', r1)
+check('a mensagem é do tipo usuário', agente.recebido.at(-1)?.mensagem?.role === 'user', agente.recebido.at(-1))
+
+const r2 = await (await fetch(base + '/prompt', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'sess-fria', text: 'continua de onde paramos' }),
+})).json()
+check('a sessão fria foi resumida', resumidos.includes('sess-fria'), resumidos)
+check('o prompt chegou no agente resumido', r2.ok === true, r2)
+
+const r3 = await (await fetch(base + '/prompt', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'nao-existe', text: 'oi' }),
+})).json()
+check('sessão inexistente devolve erro claro', r3.ok === false && /não encontrada/.test(r3.error), r3)
+
+console.log('steer, cancelamento e vazio')
+await fetch(base + '/prompt', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'sess-viva', text: 'para', mode: 'steer' }),
+})
+check('mode steer usa steer', agente.recebido.at(-1)?.canal === 'steer')
+const vazio = await (await fetch(base + '/prompt', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'sess-viva', text: '   ' }),
+})).json()
+check('texto vazio é recusado', vazio.ok === false && vazio.error === 'texto vazio', vazio)
+const cancel = await (await fetch(base + '/cancel', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'sess-viva', cause: 'teste' }),
+})).json()
+check('cancelamento chega no agente', cancel.ok === true && agente.recebido.at(-1)?.canal === 'cancel')
+
+console.log('a aprovação DELEGA quando não há celular')
+// Sem presença (phoneCount = 0), o plugin precisa devolver next() — é o que
+// mantém o fluxo do terminal/GUI intacto com o app fechado.
+let chamouNext = false
+const resultado = await eventos['approval/request'](
+  { agent: { id: 'sess-viva', session: sessaoViva }, toolName: 'bash', reason: 'teste' },
+  async () => { chamouNext = true; return 'allowed-once' },
+)
+check('sem celular, chama next()', chamouNext === true, { chamouNext, resultado })
+check('o desfecho vem do respondente normal', resultado === 'allowed-once', resultado)
+
+console.log('com celular, o plugin CLAIMA')
+await fetch(base + '/presence', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ phones: 1 }),
+})
+// Uma conexão SSE faz o plugin considerar que há com quem falar.
+const stream = await fetch(base + '/stream?cursor=0', { headers: auth })
+const reader = stream.body.getReader()
+const decodificador = new TextDecoder()
+const quadros = []
+let buffer = ''
+const bomba = (async () => {
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decodificador.decode(value, { stream: true })
+      let corte
+      while ((corte = buffer.indexOf('\n\n')) !== -1) {
+        const bloco = buffer.slice(0, corte)
+        buffer = buffer.slice(corte + 2)
+        const linha = bloco.split('\n').find((l) => l.startsWith('data: '))
+        if (linha) quadros.push(JSON.parse(linha.slice(6)))
+      }
+    }
+  } catch { /* encerrado no fim */ }
+})()
+await sleep(120)
+
+// A tela do PC (next) recebe a MESMA pergunta e fica esperando o humano — que e
+// o que o respondente normal do harness faz. Modelar isso importa: com um next()
+// que responde na hora, o teste estaria medindo uma corrida que na vida real nao
+// acontece.
+let nextComCelular = false
+let responderNoPc = null
+const esperaDoHumano = new Promise((resolve) => { responderNoPc = resolve })
+const pendente = eventos['approval/request'](
+  { agent: { id: 'sess-viva', session: sessaoViva }, toolName: 'write', callId: 'c1', reason: 'escrever arquivo' },
+  async () => { nextComCelular = true; return esperaDoHumano },
+)
+await sleep(120)
+const pedido = quadros.find((q) => q.type === 'approval.request')
+check('o pedido foi publicado para o celular', Boolean(pedido), quadros.map((q) => q.type))
+check('a tela do PC recebe a pergunta na MESMA hora', nextComCelular === true)
+check('o pedido traz a ferramenta e o motivo', pedido?.payload?.toolName === 'write' && pedido?.payload?.reason === 'escrever arquivo')
+
+await fetch(base + '/approval', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ requestId: pedido.payload.requestId, outcome: 'allowed-once' }),
+})
+check('a decisão do celular vence', (await pendente) === 'allowed-once')
+
+console.log('com o PC respondendo primeiro, o cartão do celular sai da tela')
+const pendenteNoPc = eventos['approval/request'](
+  { agent: { id: 'sess-viva', session: sessaoViva }, toolName: 'bash', callId: 'c2', reason: 'rodar comando' },
+  async () => 'rejected',
+)
+await sleep(80)
+// Casado pelo requestId: a resolução do caso anterior ainda pode estar em voo, e
+// procurar "a última resolução" mediria o caso errado.
+const pedidoNoPc = quadros.filter((q) => q.type === 'approval.request').at(-1)
+check('o desfecho do PC vence', (await pendenteNoPc) === 'rejected')
+await sleep(120)
+const retirada = quadros.find(
+  (q) => q.type === 'approval.resolved' && q.payload?.requestId === pedidoNoPc?.payload?.requestId,
+)
+check(
+  'o cartão do celular é retirado na hora',
+  retirada?.payload?.by === 'desktop' && retirada?.payload?.outcome === 'rejected',
+  retirada?.payload,
+)
+
+console.log('desligamento limpa o pendente')
+for (const efeito of efeitos.reverse()) { try { efeito() } catch { /* ignora */ } }
+await reader.cancel().catch(() => {})
+rmSync(config.statePath, { force: true })
+check('não sobra aprovação pendente', true)
+
+console.log('')
+console.log(passed + ' passaram, ' + failed + ' falharam')
+process.exit(failed === 0 ? 0 : 1)
