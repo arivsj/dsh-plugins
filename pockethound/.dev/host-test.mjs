@@ -107,9 +107,17 @@ const efeitos = []
 // plugin os encontra em campo (camada do usuario). O acesso por propriedade vem
 // undefined, e sem o fallback para ctx.get() o /prompt respondia "sessao nao
 // encontrada" para uma sessao viva. Este teste existe para nao voltar.
+const criadas = []
+const registradas = []
 const servicos = {
   agents: {
     get: (id) => (id === 'sess-viva' ? agente : undefined),
+    // Criar sessao e o que o celular faz ao escolher um workspace: o harness
+    // recebe o cwd por meta e nasce uma sessao NOVA naquela pasta.
+    create: async ({ sessionId, meta }) => {
+      criadas.push({ sessionId, cwd: meta?.cwd })
+      return { agent: { id: sessionId, session: { header: { cwd: meta?.cwd } } } }
+    },
     resume: async ({ resumeSessionId }) => {
       resumidos.push(resumeSessionId)
       if (resumeSessionId !== 'sess-fria') throw new Error('sessão desconhecida')
@@ -117,6 +125,15 @@ const servicos = {
     },
   },
   sessions: { list: () => [sessaoViva] },
+  workspaceRegistry: {
+    list: () => [
+      { id: 'ws-proj', title: 'PocketHound', path: '/home/u/PocketHound', sessionIds: ['sess-viva'], createdAt: 1 },
+      { id: 'ws-desk', title: 'PocketHound desk', path: '/home/u/PocketHound desk', sessionIds: [], createdAt: 2 },
+    ],
+    get: (id) => (id === 'ws-desk' ? { id: 'ws-desk', title: 'PocketHound desk', path: '/home/u/PocketHound desk', sessionIds: [] } : undefined),
+    resolveByPath: async (caminho) => (caminho === '/home/u/novo' ? undefined : { id: 'ws-x', path: caminho, sessionIds: [] }),
+    create: async (caminho, title) => ({ id: 'ws-novo', path: caminho, title: title ?? caminho, sessionIds: [] }),
+  },
   sessionQuery: {
     listSessions: async () => [
       { header: { id: 'sess-viva', cwd: '/dev/proj', createdAt: 1000 }, live: true, persisted: true },
@@ -129,7 +146,27 @@ const servicos = {
   sessionPersistence: {
     locate: (header) => (header ? { kind: 'jsonl', path: '/home/u/.dsh/sessions/--proj--/' + header.id + '/session.jsonl.zstd' } : undefined),
   },
-  tools: { register: () => () => {} },
+  tools: {
+    register: (ferramenta) => {
+      registradas.push(ferramenta)
+      return () => {}
+    },
+  },
+  // A UI web registra UM provedor neste servico. O plugin envolve o que for
+  // registrado para a pergunta chegar tambem ao celular — sem ocupar o assento,
+  // que e exclusivo e derruba o boot se estiver ocupado.
+  userQuestions: {
+    registerProvider: (provedor) => {
+      servicos.userQuestions.provider = provedor
+      return () => { delete servicos.userQuestions.provider }
+    },
+    // O servico de verdade repassa a pergunta ao provedor registrado.
+    ask: (request) => {
+      const provedor = servicos.userQuestions.provider
+      if (!provedor) return Promise.reject(new Error('no user-questions provider is registered'))
+      return provedor.ask(request)
+    },
+  },
 }
 
 const ctx = {
@@ -160,6 +197,31 @@ const ids = lista.sessions.map((s) => s.id)
 check('a sessão viva aparece', ids.includes('sess-viva'), ids)
 check('a sessão fria do disco aparece', ids.includes('sess-fria'), ids)
 check('a de subagente aparece marcada', lista.sessions.find((s) => s.id === 'sess-sub')?.origin === 'subagent', lista.sessions)
+
+console.log('workspaces: escolher ONDE trabalhar')
+const workspaces = await (await fetch(base + '/workspaces', { headers: auth })).json()
+check('lista os workspaces do harness', workspaces.workspaces.length === 2, workspaces.workspaces)
+check('traz nome e caminho', workspaces.workspaces[0].title === 'PocketHound' && workspaces.workspaces[0].path === '/home/u/PocketHound')
+check('traz os ids das sessoes de cada um', workspaces.workspaces[0].sessions.includes('sess-viva'))
+
+const criada = await (await fetch(base + '/session', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ workspaceId: 'ws-desk' }),
+})).json()
+check('cria sessao no workspace pedido', criada.ok === true && criada.workspaceId === 'ws-desk', criada)
+check('a sessao nasce no cwd do workspace', criadas.at(-1)?.cwd === '/home/u/PocketHound desk', criadas)
+
+const avulso = await (await fetch(base + '/session', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ path: '/home/u/novo' }),
+})).json()
+check('caminho novo vira workspace e sessao', avulso.ok === true && avulso.workspaceId === 'ws-novo', avulso)
+
+const semWorkspace = await (await fetch(base + '/session', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ workspaceId: 'ws-que-nao-existe' }),
+})).json()
+check('workspace desconhecido devolve erro claro', semWorkspace.ok === false && /nao encontrado/.test(semWorkspace.error), semWorkspace)
 check('a viva vem primeiro', lista.sessions[0].status === 'live', lista.sessions[0])
 check('a fria traz status cold', lista.sessions.find((s) => s.id === 'sess-fria')?.status === 'cold')
 check('o workspace vem do header', lista.sessions.find((s) => s.id === 'sess-fria')?.workspace === '/dev/antigo')
@@ -290,6 +352,58 @@ check(
   retirada?.payload?.by === 'desktop' && retirada?.payload?.outcome === 'rejected',
   retirada?.payload,
 )
+
+
+console.log('perguntas: celular e tela do PC ao mesmo tempo')
+// O contrato do provedor devolve { answers } — e o que a ferramenta nativa do
+// harness espera.
+const daTela = { ask: async () => { await sleep(120); return { answers: [{ id: 'q1', selected: ['da tela'] }] } } }
+servicos.userQuestions.registerProvider(daTela)
+check('o provedor da UI fica envolvido', servicos.userQuestions.provider !== daTela)
+
+const antesPerguntas = quadros.length
+const respostaPromessa = servicos.userQuestions.provider.ask({
+  agent: { id: 'sess-viva' },
+  questions: [{ id: 'q1', question: 'Qual caminho?', options: [{ label: 'a' }, { label: 'b' }] }],
+})
+// 40 ms: menos que os 120 ms da tela, para a corrida medir o celular vencendo.
+await sleep(40)
+const pedidoDePergunta = quadros.slice(antesPerguntas).find((q) => q.type === 'question.request')
+check('a pergunta chega ao celular', Boolean(pedidoDePergunta), quadros.slice(antesPerguntas).map((q) => q.type))
+check('traz as opcoes', pedidoDePergunta?.payload?.questions?.[0]?.options?.length === 2)
+
+await fetch(base + '/question', {
+  method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ requestId: pedidoDePergunta.payload.requestId, answers: [{ id: 'q1', selected: ['do celular'] }] }),
+})
+check('a resposta do celular vence', (await respostaPromessa)?.answers?.[0]?.selected?.[0] === 'do celular')
+
+const antesTela = quadros.length
+const respostaDaTela = servicos.userQuestions.provider.ask({ agent: { id: 'sess-viva' }, questions: [{ id: 'q1', question: 'Outra?' }] })
+await sleep(40)
+const pedidoDaTela = quadros.slice(antesTela).find((q) => q.type === 'question.request')
+check('a tela do PC responde normalmente', (await respostaDaTela)?.answers?.[0]?.selected?.[0] === 'da tela')
+await sleep(80)
+// Casado pelo requestId: o celular tambem publica resolucao agora, e procurar
+// "a ultima resolucao" mediria o caso anterior.
+const retiradaDaPergunta = quadros.find(
+  (q) => q.type === 'question.resolved' && q.payload?.requestId === pedidoDaTela?.payload?.requestId,
+)
+check('o cartao do celular e retirado quando a tela responde', retiradaDaPergunta?.payload?.by === 'desktop', retiradaDaPergunta?.payload)
+
+
+console.log('pockethound_ask: pergunta nos dois lugares')
+const ferramentaAsk = registradas.find((f) => f.name === 'pockethound_ask')
+check('a ferramenta do agente esta registrada', Boolean(ferramentaAsk), registradas.map((f) => f.name))
+const antesDaFerramenta = quadros.length
+const resultadoDaFerramenta = await ferramentaAsk.execute(
+  { question: 'Sigo?', header: 'Teste', options: [{ label: 'sim' }, { label: 'nao' }] },
+  { agent: { id: 'sess-viva' } },
+)
+check('a resposta chega pela tela do PC', resultadoDaFerramenta?.selected?.[0] === 'da tela', resultadoDaFerramenta)
+await sleep(80)
+const pedidoDaFerramenta = quadros.slice(antesDaFerramenta).find((q) => q.type === 'question.request')
+check('e a mesma pergunta chega ao celular', Boolean(pedidoDaFerramenta))
 
 console.log('desligamento limpa o pendente')
 for (const efeito of efeitos.reverse()) { try { efeito() } catch { /* ignora */ } }

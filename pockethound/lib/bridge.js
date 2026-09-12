@@ -73,6 +73,8 @@ export class Bridge {
    * @param {(input: object) => Promise<object>} options.onPrompt - envio de prompt a uma sessão.
    * @param {(sessionId: string, cause: string) => boolean} options.onCancel - cancelamento de turno.
    * @param {() => object[]} options.listSessions - retrato das sessões.
+   * @param {() => object[]} options.listWorkspaces - workspaces do harness.
+   * @param {(input: object) => Promise<object>} options.onCreateSession - cria sessão num workspace.
    * @param {string} options.statePath - caminho do arquivo de anúncio.
    * @param {(message: string) => void} [options.log] - registrador.
    */
@@ -82,6 +84,8 @@ export class Bridge {
     this.onPrompt = options.onPrompt
     this.onCancel = options.onCancel
     this.listSessions = options.listSessions
+    this.listWorkspaces = options.listWorkspaces ?? (() => [])
+    this.onCreateSession = options.onCreateSession ?? (async () => ({ ok: false, error: 'não configurado' }))
     this.statePath = options.statePath
     this.log = options.log ?? (() => {})
     this.token = randomBytes(32).toString('hex')
@@ -233,6 +237,20 @@ export class Bridge {
         // A lista pode consultar o disco (sessões frias), então é assíncrona.
         this.#json(res, 200, { sessions: await this.listSessions(), cursor: this.hub.seq })
         return
+
+      case '/workspaces':
+        // Os workspaces do harness — e por eles que o celular escolhe ONDE
+        // trabalhar. Sessao nao muda de pasta: mudar de workspace e criar sessao
+        // nova la dentro, que e o que o POST /session faz.
+        this.#json(res, 200, { workspaces: this.listWorkspaces() })
+        return
+
+      case '/session': {
+        const body = await readJson(req)
+        const result = await this.onCreateSession(body)
+        this.#json(res, result.ok ? 200 : 400, result)
+        return
+      }
 
       case '/pending':
         this.#json(res, 200, { approvals: this.hub.listPending(), cursor: this.hub.seq })

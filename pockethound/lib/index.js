@@ -18,6 +18,7 @@
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -262,18 +263,80 @@ function apply(ctx, config) {
 
   /* ---------------------------------------------------------- perguntas */
 
-  // O seam `userQuestions` aceita UM provedor por contexto. O harness web já
-  // registra o dele, então só assumimos quando o assento está vago (perfis
-  // headless). Nunca deslocamos uma UI que já funciona.
+  // O seam `userQuestions` aceita UM provedor por contexto, e a UI web registra
+  // o dela (assumir o assento derruba o boot — foi o erro que apareceu no
+  // começo). Mas a ferramenta `ask_user_question` chama `userQuestions.ask()`
+  // DIRETO, sem gancho nenhum: sem envolver o provedor, a pergunta de múltipla
+  // escolha nunca chega ao celular.
+  //
+  // A saída é ENVOLVER quem se registrar: passamos a perguntar nos dois lugares
+  // ao mesmo tempo e devolvemos a primeira resposta. Enquanto ninguém encostar
+  // aqui, a UI web segue dona do assento e nada muda.
+  ctx.effect(() => {
+    if (!config.claimQuestions) return
+    let desfazer
+    ctx.inject(['userQuestions'], (scope) => {
+      const servico = scope.userQuestions
+      if (!servico || typeof servico.registerProvider !== 'function') return
+      const registrarOriginal = servico.registerProvider.bind(servico)
+
+      /**
+       * Envolve um provedor para que a pergunta chegue também ao celular.
+       * @param {object} provedor - o provedor que a UI web registrou.
+       * @returns {object} o provedor envolvido.
+       */
+      const envolver = (provedor) => ({
+        ask: async (request) => {
+          const daTela = Promise.resolve(provedor.ask(request))
+          /** @type {string|undefined} */
+          let requestId
+          const doFone = hub
+            .requestQuestion({
+              sessionId: String(request?.agent?.id ?? ''),
+              questions: request?.questions ?? [],
+              signal: request?.signal,
+              timeoutMs: config.questionTimeoutMs,
+              onRequest: (frame) => { requestId = frame.requestId },
+            })
+            // O contrato do provedor e { answers }. O hub devolve so a lista, e
+            // sem envelopar aqui o caminho do celular responderia num formato e o
+            // da tela noutro.
+            .then((resposta) =>
+              resposta === null || resposta === undefined
+                ? new Promise(() => {})
+                : { answers: { answers: resposta }, quem: 'celular' })
+            .catch(() => new Promise(() => {}))
+
+          // A tela do PC responde sempre; o celular só vence se responder antes.
+          const vencedor = await Promise.race([
+            daTela.then((answers) => ({ answers, quem: 'tela' })),
+            doFone,
+          ])
+          // Quem respondeu foi a tela: o cartão sai do celular na hora, em vez de
+          // esperar um toque que não muda mais nada.
+          if (vencedor.quem === 'tela' && requestId) hub.withdrawQuestion(requestId, 'desktop')
+          return vencedor.answers
+        },
+      })
+
+      // Ninguém mais registra provedor aqui alem da UI web, mas se registrar,
+      // tambem passa pelo envolucro.
+      servico.registerProvider = (provedor) => registrarOriginal(envolver(provedor))
+      desfazer = () => { servico.registerProvider = registrarOriginal }
+    })
+    return () => desfazer?.()
+  }, 'pockethound: perguntas tambem no celular (envolvendo o provedor da UI)')
+
+  /* ------------------------------------------------- perfil sem UI web */
+
+  // Perfil headless: o assento esta vago e o celular vira o provedor.
   ctx.effect(() => {
     if (!config.claimQuestions) return
     let dispose
     ctx.inject(['userQuestions'], (scope) => {
-      // A UI web não tolera o assento ocupado: o construtor dela registra o
-      // provedor e lança se já houver um — derrubando o boot inteiro. E ela
-      // monta DEPOIS daqui (depende de muito mais serviços), então o try/catch
-      // abaixo, sozinho, não a salva. Decidimos pelo que a árvore do Loader
-      // declara, e não pela ordem em que os plugins ativam.
+      // Decidimos pelo que a arvore do Loader declara, e nao pela ordem em que
+      // os plugins ativam: a UI web monta depois e lanca se o assento estiver
+      // ocupado, derrubando o boot inteiro.
       if (webOwnsQuestions(scope)) return
       try {
         dispose = scope.userQuestions.registerProvider({
@@ -315,6 +378,77 @@ function apply(ctx, config) {
     return { ok: true, sessionId, mode: input.mode === 'steer' ? 'steer' : 'followup' }
   }
 
+  /* --------------------------------------------------------- workspaces */
+
+  /**
+   * Os workspaces do harness, no formato que o celular desenha.
+   *
+   * E a lista que a barra lateral do navegador mostra — os mesmos nomes, os
+   * mesmos caminhos. Sem ela o celular nao tem como escolher ONDE trabalhar, e
+   * era exatamente isso que faltava para o app servir na rua.
+   *
+   * @returns {object[]} workspaces, vazios quando o servico nao esta visivel.
+   */
+  const listWorkspaces = () => {
+    const registro = servico(ctx, 'workspaceRegistry')
+    if (!registro || typeof registro.list !== 'function') return []
+    try {
+      return registro.list().map((workspace) => ({
+        id: String(workspace.id),
+        title: String(workspace.title ?? ''),
+        path: String(workspace.path ?? ''),
+        // So os ids: o celular ja recebe as sessoes por session.upsert, e mandar
+        // o retrato inteiro de cada uma aqui dobraria o quadro sem necessidade.
+        sessions: [...(workspace.sessionIds ?? [])].map(String),
+        createdAt: workspace.createdAt,
+      }))
+    } catch (error) {
+      log('nao consegui listar workspaces: ' + (error?.message ?? error))
+      return []
+    }
+  }
+
+  /**
+   * Cria uma sessao dentro de um workspace.
+   *
+   * Sessao nao muda de pasta: o cwd e fixado quando ela nasce. Trocar de
+   * workspace e, na pratica, isto — abrir uma sessao nova la dentro. E o mesmo
+   * caminho que o harness usa para criar as sessoes configuradas (meta.cwd).
+   *
+   * @param {object} input - pedido recebido da ponte.
+   * @param {string} [input.workspaceId] - workspace ja conhecido.
+   * @param {string} [input.path] - caminho, para workspace novo ou avulso.
+   * @returns {Promise<object>} ok + sessionId + workspaceId, ou o erro.
+   */
+  const onCreateSession = async (input) => {
+    const registro = servico(ctx, 'workspaceRegistry')
+    const agents = servico(ctx, 'agents')
+    if (!agents) return { ok: false, error: 'servico agents invisivel neste contexto' }
+    if (!registro) return { ok: false, error: 'servico de workspaces invisivel neste contexto' }
+
+    const workspaceId = String(input.workspaceId ?? '')
+    const caminho = String(input.path ?? '').trim()
+    let alvo
+    try {
+      if (workspaceId) alvo = registro.get(workspaceId)
+      else if (caminho) alvo = (await registro.resolveByPath(caminho)) ?? (await registro.create(caminho))
+    } catch (error) {
+      return { ok: false, error: 'workspace: ' + (error?.message ?? error) }
+    }
+    if (!alvo?.path) return { ok: false, error: 'workspace nao encontrado: ' + (workspaceId || caminho) }
+
+    const sessionId = 'session-' + randomUUID()
+    try {
+      await agents.create({ sessionId, meta: { cwd: alvo.path } })
+    } catch (error) {
+      return { ok: false, error: 'nao consegui criar a sessao: ' + (error?.message ?? error) }
+    }
+    log('sessao ' + sessionId + ' criada em ' + alvo.path)
+    // O quadro session.upsert sai sozinho: o harness emite session/created e o
+    // listener do plugin publica. O celular ja ve a sessao nova sem pedir nada.
+    return { ok: true, sessionId, workspaceId: String(alvo.id ?? ''), path: String(alvo.path) }
+  }
+
   /**
    * Cancela o turno ativo de uma sessão.
    * @param {string} sessionId - sessão alvo.
@@ -336,6 +470,8 @@ function apply(ctx, config) {
     onPrompt,
     onCancel,
     listSessions,
+    listWorkspaces,
+    onCreateSession,
     statePath: resolveStatePath(config.statePath),
     log,
   })
@@ -355,7 +491,7 @@ function apply(ctx, config) {
       let dispose
       ctx.inject(['tools'], (scope) => {
         const off1 = scope.tools.register(defineNotifyTool(defineTool, hub))
-        const off2 = scope.tools.register(defineAskTool(defineTool, hub))
+        const off2 = scope.tools.register(defineAskTool(defineTool, hub, ctx))
         dispose = () => {
           off1?.()
           off2?.()
@@ -646,7 +782,7 @@ function defineNotifyTool(defineTool, hub) {
  * @param {import('./hub.js').Hub} hub - hub do plugin.
  * @returns {object} definição da ferramenta.
  */
-function defineAskTool(defineTool, hub) {
+function defineAskTool(defineTool, hub, ctx) {
   return defineTool({
     name: 'pockethound_ask',
     description:
@@ -682,19 +818,44 @@ function defineAskTool(defineTool, hub) {
     },
     async execute(args, exec) {
       const timeoutMs = Math.max(15, Math.min(1800, Number(args.timeoutSeconds) || 300)) * 1000
-      const answers = await hub.requestQuestion({
-        sessionId: String(exec?.agent?.id ?? ''),
-        questions: [
-          {
-            id: 'q1',
-            question: String(args.question ?? ''),
-            ...(args.header !== undefined ? { header: args.header } : {}),
-            ...(args.options !== undefined ? { options: args.options } : {}),
-          },
-        ],
-        signal: exec?.signal,
-        timeoutMs,
-      })
+      const questions = [
+        {
+          id: 'q1',
+          question: String(args.question ?? ''),
+          ...(args.header !== undefined ? { header: args.header } : {}),
+          ...(args.options !== undefined ? { options: args.options } : {}),
+        },
+      ]
+
+      // A pergunta NAO vai so para o celular.
+      //
+      // Quem pergunta aqui e o servico do harness, e nao a ponte direto: e ele que
+      // sabe perguntar nos dois lugares (o celular entra pelo provedor envolvido).
+      // Falar com o hub direto deixava a pergunta invisivel na tela do PC — quem
+      // estivesse no teclado nao ficava sabendo que o agente esperava resposta.
+      const servicoPerguntas = servico(ctx, 'userQuestions')
+      let answers = null
+      if (servicoPerguntas && typeof servicoPerguntas.ask === 'function') {
+        try {
+          const resposta = await servicoPerguntas.ask({
+            questions,
+            ...(exec?.agent !== undefined ? { agent: exec.agent } : {}),
+            signal: exec?.signal,
+          })
+          answers = resposta?.answers ?? null
+        } catch (error) {
+          // Sem provedor registrado (perfil exotico) caimos para a ponte.
+          log('pergunta pelo servico falhou, indo direto ao celular: ' + (error?.message ?? error))
+        }
+      }
+      if (answers === null) {
+        answers = await hub.requestQuestion({
+          sessionId: String(exec?.agent?.id ?? ''),
+          questions,
+          signal: exec?.signal,
+          timeoutMs,
+        })
+      }
       const answer = Array.isArray(answers) ? answers[0] : undefined
       return {
         answered: Boolean(answer),

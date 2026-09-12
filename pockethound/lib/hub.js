@@ -461,12 +461,16 @@ export class Hub {
     if (this.phoneCount <= 0 || this.subscribers.size === 0) return null
     if (input.signal?.aborted) return null
     const requestId = randomUUID()
-    this.publish(OUTBOUND.QUESTION_REQUEST, {
+    const frame = {
       requestId,
       sessionId: input.sessionId,
       questions: input.questions,
       expiresAt: Date.now() + input.timeoutMs,
-    }, input.sessionId)
+    }
+    this.publish(OUTBOUND.QUESTION_REQUEST, frame, input.sessionId)
+    try {
+      input.onRequest?.(frame)
+    } catch { /* avisar quem chamou não pode derrubar a pergunta */ }
     return new Promise((resolve) => {
       const onAbort = () => settle(null)
       const settle = (answers) => {
@@ -480,8 +484,26 @@ export class Hub {
       if (input.signal) input.signal.addEventListener('abort', onAbort, { once: true })
       const timer = setTimeout(() => settle(null), input.timeoutMs)
       if (typeof timer.unref === 'function') timer.unref()
-      this.pendingQuestions.set(requestId, { requestId, resolve: settle, timer })
+      this.pendingQuestions.set(requestId, { requestId, resolve: settle, timer, sessionId: input.sessionId })
     })
+  }
+
+  /**
+   * Retira a pergunta do celular quando quem respondeu foi a tela do PC.
+   *
+   * Mesmo motivo da retirada de aprovacao: cartao respondido que continua na tela
+   * e uma fila que mente, e quem tocar nele depois nao entende o silencio.
+   *
+   * @param {string} requestId - pergunta a retirar.
+   * @param {string} [by] - quem respondeu.
+   * @returns {boolean} se havia algo para retirar.
+   */
+  withdrawQuestion(requestId, by = 'desktop') {
+    const entry = this.pendingQuestions.get(String(requestId ?? ''))
+    if (!entry) return false
+    entry.resolve(null)
+    this.publish(OUTBOUND.QUESTION_RESOLVED, { requestId: String(requestId), by }, entry.sessionId)
+    return true
   }
 
   /**
@@ -493,6 +515,14 @@ export class Hub {
     const entry = this.pendingQuestions.get(input.requestId)
     if (!entry) return { ok: false, error: 'unknown-request' }
     entry.resolve(input.answers ?? [])
+    // Publica a resolucao TAMBEM quando quem respondeu foi o celular: sem isto a
+    // pergunta resolvida nao chega aos outros clientes, e o cartao continua
+    // respondivel na tela de quem ja respondeu.
+    this.publish(OUTBOUND.QUESTION_RESOLVED, {
+      requestId: String(input.requestId),
+      by: 'phone',
+      answers: input.answers ?? [],
+    }, entry.sessionId)
     return { ok: true }
   }
 

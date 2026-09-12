@@ -95,6 +95,8 @@ export const OUTBOUND = Object.freeze({
   APPROVAL_REQUEST: 'approval.request',
   APPROVAL_RESOLVED: 'approval.resolved',
   QUESTION_REQUEST: 'question.request',
+  /** A pergunta foi respondida em outro lugar: o cartão do celular sai da tela. */
+  QUESTION_RESOLVED: 'question.resolved',
   DESK_STATE: 'desk.state',
   NOTICE: 'notice',
   PONG: 'pong',
