@@ -289,13 +289,21 @@ export class Hub {
    * @param {unknown} [input.args] - argumentos já conhecidos da chamada.
    * @param {AbortSignal} [input.signal] - cancelamento do turno.
    * @param {number} input.timeoutMs - prazo máximo.
+   * @param {boolean} [input.waitForPhone] - guardar o pedido mesmo SEM celular
+   *   conectado, à espera de quem abrir o app. Vale quando o PC já está
+   *   perguntando junto: aí o celular não é o único respondente.
    * @param {(frame: object) => void} [input.onRequest] - avisado do pedido
    *   publicado, com o requestId. É o que permite RETIRAR o cartão do celular
    *   quando quem responder primeiro for a tela do PC.
    * @returns {Promise<string|null>} desfecho fechado do DSH, ou null para delegar.
    */
   async requestApproval(input) {
-    if (this.phoneCount <= 0 || this.subscribers.size === 0) return null
+    // O celular só é obrigatório quando ele é o ÚNICO respondente. Com o PC
+    // perguntando ao mesmo tempo (`waitForPhone`), guardar o pedido aqui é o que
+    // faz o cartão ESPERAR quem abrir o app depois — em vez de o pedido passar
+    // batido pelo celular só porque ele estava fechado naquele instante.
+    if (this.subscribers.size === 0) return null
+    if (this.phoneCount <= 0 && !input.waitForPhone) return null
     if (input.signal?.aborted) return null
 
     const digest = Hub.digestArguments(input.args)
@@ -455,10 +463,12 @@ export class Hub {
    * @param {object[]} input.questions - perguntas no formato do DSH.
    * @param {AbortSignal} [input.signal] - cancelamento.
    * @param {number} input.timeoutMs - prazo máximo.
+   * @param {boolean} [input.waitForPhone] - guardar a pergunta mesmo sem celular.
    * @returns {Promise<object|null>} respostas, ou null quando ninguém respondeu.
    */
   async requestQuestion(input) {
-    if (this.phoneCount <= 0 || this.subscribers.size === 0) return null
+    if (this.subscribers.size === 0) return null
+    if (this.phoneCount <= 0 && !input.waitForPhone) return null
     if (input.signal?.aborted) return null
     const requestId = randomUUID()
     const frame = {

@@ -165,6 +165,31 @@ hub.setPhoneCount(0)
 const delegated = await hub.requestApproval({ sessionId: 'sess-1', toolName: 'write', args: {}, timeoutMs: 100 })
 check('devolve null para o chamador delegar', delegated === null, delegated)
 
+console.log('mas com o PC na corrida, o pedido ESPERA o celular')
+// É o caso do app fechado: o PC recebe a pergunta, e o celular precisa
+// encontrá-la pendente quando alguém abrir o app. Descartar o pedido aqui era
+// o que fazia a aprovação não existir para o bolso.
+{
+  const so = new Hub({ replayLimit: 50, coalesceMs: 5, approvalTimeoutMs: 60000 })
+  so.setPhoneCount(0)
+  // O desk conectado (assinante), mas nenhum celular: é a situação do app fechado.
+  so.subscribe(0, () => {})
+  const guardado = so.requestApproval({
+    sessionId: 'sess-1', toolName: 'bash', args: { command: 'ls' },
+    timeoutMs: 60000, waitForPhone: true,
+  })
+  await sleep(30)
+  check('o pedido fica pendente sem celular nenhum', so.snapshot().pendingApprovals === 1, so.snapshot())
+  const publicado = so.ring.some((q) => q.type === 'approval.request')
+  check('e vai para o anel, para o desk guardar', publicado)
+  // O celular chega depois: a decisão dele vale.
+  const requestId = so.ring.find((q) => q.type === 'approval.request').payload.requestId
+  const decisao = so.decideApproval({ requestId, outcome: 'allowed-once' })
+  check('quem chega depois ainda decide', decisao.ok === true, decisao)
+  check('e o pedido fecha', (await guardado) === 'allowed-once')
+  so.shutdown()
+}
+
 console.log('cancelamento do turno')
 hub.setPhoneCount(1)
 const controller = new AbortController()

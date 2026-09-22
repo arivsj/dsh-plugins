@@ -28,6 +28,21 @@ import { projectSessionEvent, OUTBOUND } from './protocol.js'
 
 const name = 'pockethound'
 
+/**
+ * "Sem prazo" para o cartão do celular quando o PC também está perguntando.
+ *
+ * Com `shareWithDesktop`, as duas telas perguntam juntas e a primeira resposta
+ * vale. Nesse desenho o prazo do celular não protege nada — ele só RETIRA o
+ * cartão do bolso enquanto a pergunta continua aberta no PC. Era o que fazia
+ * quem pegava o celular um minuto e meio depois não ter mais onde responder, com
+ * a sessão parada esperando alguém que estava com o celular na mão.
+ *
+ * Não é `Infinity` por um detalhe do Node: `setTimeout` com valor acima de
+ * 2^31-1 estoura e dispara NA HORA — o oposto do que se quer aqui. Este é o
+ * maior valor aceito (24,8 dias): na prática, "até alguém responder".
+ */
+const SEM_PRAZO_MS = 2 ** 31 - 1
+
 // Sem dependência obrigatória: o plugin ativa em QUALQUER perfil (web,
 // headless, futuros). Tudo que precisa de um serviço específico entra em
 // `ctx.inject`, que só roda onde o serviço existir — declarar aqui deixaria a
@@ -224,7 +239,15 @@ function apply(ctx, config) {
           reason: request.reason,
           args: argumentsForApproval(ctx, request),
           signal: request.signal,
-          timeoutMs: config.approvalTimeoutMs,
+          // Com o PC perguntando junto, o celular não tem prazo próprio: o cartão
+          // vive enquanto a aprovação viver. Sozinho, ele mantém o prazo curto —
+          // aí sim o estouro é o que passa a pergunta para o respondente normal.
+          timeoutMs: config.shareWithDesktop ? SEM_PRAZO_MS : config.approvalTimeoutMs,
+          // E, com o PC na corrida, o pedido não pode ser descartado só porque o
+          // celular estava FECHADO neste instante: ele fica guardado, à espera de
+          // quem abrir o app. Era isso que fazia a aprovação pendente não existir
+          // para o celular — o PC recebia, o app abria, e não havia cartão algum.
+          waitForPhone: config.shareWithDesktop,
           onRequest: (frame) => { requestId = frame.requestId },
         })
 
@@ -295,7 +318,10 @@ function apply(ctx, config) {
               sessionId: String(request?.agent?.id ?? ''),
               questions: request?.questions ?? [],
               signal: request?.signal,
-              timeoutMs: config.questionTimeoutMs,
+              // Mesma razão da aprovação: a tela do PC está perguntando junto,
+              // então o cartão do celular não pode se retirar sozinho.
+              timeoutMs: SEM_PRAZO_MS,
+              waitForPhone: true,
               onRequest: (frame) => { requestId = frame.requestId },
             })
             // O contrato do provedor e { answers }. O hub devolve so a lista, e
