@@ -31,6 +31,21 @@ DSH  ──session/event──►  hub  ──SSE 127.0.0.1──►  PocketHoun
 ./install.sh --uninstall  # remove
 ```
 
+### O que ele usa dos outros plugins (e o que acontece sem eles)
+
+Este plugin **não** calcula preço de token nem ocupação de contexto: ele lê as
+projeções que o Harness já mantém e publica o retrato (`stats`) para o celular.
+
+| fonte | de quem é | sem ela |
+|---|---|---|
+| projeção `sessionCost` | plugin [`session-cost`](../session-cost) | o rodapé do celular não mostra o valor em US$ (o resto funciona igual) |
+| projeção `contextPressure` | `@deepseek-ai/dsh-token-meter`, do próprio Harness | o rodapé não mostra a porcentagem de contexto |
+
+Ler em vez de recalcular é o que garante que o celular e o navegador mostrem o
+**mesmo número** — a tabela de preço (e a janela de pico) fica num arquivo só.
+
+Para instalar tudo de uma vez: `cd .. && ./install-all.sh`.
+
 O pacote vai para `$DSH_HOME/profiles/node_modules/dsh-pockethound` (o farm
 compartilhado, então todo perfil resolve o nome) e a entry é escrita na
 **camada do usuário** `$DSH_HOME/cordis.patch.yml` — a que vale para todos os

@@ -125,6 +125,19 @@ const servicos = {
     },
   },
   sessions: { list: () => [sessaoViva] },
+  // As projecoes do harness — custo em dolar (plugin session-cost) e ocupacao de
+  // contexto (dsh-token-meter). O plugin do celular LE daqui em vez de recalcular
+  // preco; e por isso que o celular e o navegador mostram o mesmo numero.
+  sessionProjections: {
+    snapshot: () => ({
+      asOfSeq: 7,
+      values: {
+        sessionCost: { modelo: 'deepseek-flash', usd: 1.506, usdPico: 1.506, amostras: 3 },
+        tokenUsage: { uncachedInputTokens: 1000, outputTokens: 2000, cacheReadTokens: 3000, cacheWriteTokens: 0 },
+        contextPressure: { pressureTokens: 900, projectedTokens: 1200, contextWindow: 100000 },
+      },
+    }),
+  },
   workspaceRegistry: {
     list: () => [
       { id: 'ws-proj', title: 'PocketHound', path: '/home/u/PocketHound', sessionIds: ['sess-viva'], createdAt: 1 },
@@ -309,6 +322,40 @@ const bomba = (async () => {
   } catch { /* encerrado no fim */ }
 })()
 await sleep(120)
+
+console.log('custo e contexto vao para o celular, lidos das projecoes')
+{
+  const antes = quadros.length
+  eventos['session/event'](
+    { id: 'sess-viva', events: [], header: {} },
+    {
+      type: 'assistant/message',
+      time: Date.now(),
+      data: {
+        turn: 1,
+        step: 1,
+        usage: { inputTokens: 10, outputTokens: 20 },
+        // Um `assistant/message` de verdade traz conteudo; sem ele o evento nem
+        // vira quadro, e o retrato (que pega carona no fechamento do passo)
+        // nunca sairia. O teste tem de parecer com o campo.
+        message: { content: [{ type: 'text', text: 'oi' }] },
+      },
+    },
+  )
+  await sleep(150)
+  const novos = quadros.slice(antes)
+  const retrato = novos.find((q) => q.type === 'turn.event' && q.payload?.kind === 'stats')
+  check('o retrato chega ao celular', Boolean(retrato), novos.map((q) => q.type + ':' + (q.payload?.kind ?? '')))
+  check('traz o gasto em dolar', retrato?.payload?.usd === 1.506, retrato?.payload)
+  check('traz quanto saiu no pico', retrato?.payload?.usdPico === 1.506, retrato?.payload)
+  check('traz a entrada e a saida', retrato?.payload?.entrada === 4000 && retrato?.payload?.saida === 2000, retrato?.payload)
+  check(
+    'traz a ocupacao do contexto (o que a proxima requisicao leva)',
+    retrato?.payload?.contextoUsado === 1200 && retrato?.payload?.contextoJanela === 100000,
+    retrato?.payload,
+  )
+  check('o retrato vai marcado com a sessao', retrato?.session === 'sess-viva', retrato?.session)
+}
 
 // A tela do PC (next) recebe a MESMA pergunta e fica esperando o humano — que e
 // o que o respondente normal do harness faz. Modelar isso importa: com um next()

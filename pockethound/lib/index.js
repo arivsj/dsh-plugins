@@ -209,6 +209,14 @@ function apply(ctx, config) {
       if (!payload) return
       hub.sessionUpsert(describeSession(session))
       hub.publishTurnEvent(id, payload)
+      // Custo e contexto NAO vem do evento: vem das projecoes que o harness ja
+      // mantem. Ler em vez de recalcular aqui e o que garante que o celular
+      // mostre o MESMO numero do navegador — o preco por horario (pico e fora de
+      // pico) fica num lugar so, no plugin session-cost.
+      if (payload.kind === 'text.done' || payload.kind === 'turn.end') {
+        const retrato = retratoDaSessao(ctx, session)
+        if (retrato) hub.publishTurnEvent(id, retrato)
+      }
     }
     const offCreated = ctx.on('session/created', onCreated)
     const offDisposed = ctx.on('session/disposed', onDisposed)
@@ -706,6 +714,81 @@ async function resolveAgentForPrompt(ctx, sessionId, allowResume, log) {
     log('não consegui resumir ' + sessionId + ': ' + (error?.message ?? error))
   }
   return undefined
+}
+
+/**
+ * Custo em dolar e ocupacao de contexto de uma sessao, lidos das projecoes.
+ *
+ * Duas fontes, nenhuma conta nova:
+ *
+ *   - `sessionCost` (plugin session-cost): o gasto em US$, tarifado no horario de
+ *     cada requisicao;
+ *   - `contextPressure` (dsh-token-meter): quantos tokens a proxima requisicao vai
+ *     levar e qual e a janela do modelo.
+ *
+ * Devolve null quando nenhuma das duas existe — perfil sem os plugins, sessao
+ * vazia, servico invisivel. O celular simplesmente nao mostra a linha.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - contexto do harness.
+ * @param {object} session - sessao dona do retrato.
+ * @returns {object|null} payload `stats` para o celular, ou null.
+ */
+function retratoDaSessao(ctx, session) {
+  try {
+    const projecoes = servico(ctx, 'sessionProjections')
+    if (!projecoes || typeof projecoes.snapshot !== 'function') return null
+    const { values } = projecoes.snapshot(session)
+    const custo = values?.sessionCost
+    const uso = values?.tokenUsage
+    const pressao = values?.contextPressure
+    if (!custo && !uso && !pressao) return null
+    const entrada = (uso?.uncachedInputTokens ?? 0) + (uso?.cacheReadTokens ?? 0) + (uso?.cacheWriteTokens ?? 0)
+    return {
+      kind: 'stats',
+      at: Date.now(),
+      usd: Number(custo?.usd ?? 0),
+      usdPico: Number(custo?.usdPico ?? 0),
+      entrada,
+      saida: Number(uso?.outputTokens ?? 0),
+      cache: Number(uso?.cacheReadTokens ?? 0),
+      // O modelo da SESSAO, nao o do plugin de custo: vem do cabecalho da ultima
+      // requisicao dela (a mesma fonte que o gateway web usa para saber o que
+      // esta valendo). Sem ele, cai no nome configurado no session-cost.
+      modelo: modeloDaSessao(session) ?? (typeof custo?.modelo === 'string' ? custo.modelo : undefined),
+      // `projectedTokens` e a ocupacao que a PROXIMA requisicao vai levar;
+      // `pressureTokens` e a ultima medida. O primeiro e o que interessa para
+      // saber se o contexto esta enchendo.
+      contextoUsado: Number.isFinite(pressao?.projectedTokens)
+        ? pressao.projectedTokens
+        : (Number.isFinite(pressao?.pressureTokens) ? pressao.pressureTokens : undefined),
+      contextoJanela: Number.isFinite(pressao?.contextWindow) ? pressao.contextWindow : undefined,
+    }
+  } catch (error) {
+    // Degrada em silencio: o retrato e enfeite de rodape e nao pode derrubar o
+    // fluxo de quadros que ja funcionava.
+    log('nao consegui ler as projecoes: ' + (error?.message ?? error))
+    return null
+  }
+}
+
+/**
+ * Qual modelo esta valendo nesta sessao.
+ *
+ * Vem do cabecalho da ultima requisicao registrada no log — a mesma fonte que o
+ * gateway do navegador consulta. Um plugin NAO alcanca a escolha viva (ela mora
+ * num mapa privado do api-proxy, que so o proprio gateway escreve), entao ler o
+ * log e o jeito honesto de responder "qual modelo esta em uso".
+ *
+ * @param {object} session - sessao do DSH.
+ * @returns {string|undefined} id do modelo, quando o log ja tem uma requisicao.
+ */
+function modeloDaSessao(session) {
+  try {
+    const config = session?.requestHeader?.()?.config
+    return typeof config?.model === 'string' && config.model ? config.model : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
