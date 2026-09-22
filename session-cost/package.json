@@ -1,0 +1,20 @@
+{
+  "name": "dsh-session-cost",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  },
+  "description": "Valor gasto (US$) na sessao, no rodape do composer, com preco por horario (pico/fora de pico) da API DeepSeek.",
+  "license": "MIT"
+}

@@ -142,3 +142,17 @@ próprio DSH — não há nada para instalar em npm.
 
 Nada é instalado dentro de um projeto/repositório: abrir outra pasta no harness
 não muda nada, os plugins já estão lá.
+
+## session-cost
+
+| | session-cost |
+|---|---|
+| tipo | dual-face (host + navegador) |
+| sistema | nenhum: sem Python, sem binario, sem modelo |
+| runtime JS | servicos do DSH: sessionProjections (host) e slots (cliente) |
+| pacotes JS | @deepseek-ai/schemastery (config) e zod (esquema da projecao), os dois ja vem no DSH |
+| download extra | nenhum |
+| memoria em uso | desprezivel: a projecao guarda totais, nao o log |
+| rotas HTTP | nenhuma |
+
+O preco por token nao e dependencia: e configuracao (veja o README do plugin).

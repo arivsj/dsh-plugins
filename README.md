@@ -11,6 +11,7 @@ dependências.
 |---|---|---|---|---|
 | **[voice-input](voice-input/README.md)** | botão de microfone no composer: grava, transcreve em português com Whisper local e escreve o texto na caixa de entrada | barra interna do composer (slot `conversation.input.left`) | host (rotas HTTP) + cliente (bundle do navegador) | ffmpeg, faster-whisper (Python), modelo Whisper (75–464 MB) |
 | **[ollama-vision](ollama-vision/README.md)** | dá visão a modelos que só entendem texto: tools `vision_ask` / `vision_warmup` respondem perguntas sobre imagens | ferramentas do agente (sem UI própria) | só host | servidor Ollama + modelo de visão `gemma4:e2b` (7,2 GB) |
+| **[session-cost](session-cost/README.md)** | quanto a sessao custou, em US$, com preco por horario (pico e fora de pico) da API DeepSeek | rodape do composer (slot `conversation.composer.dock`) | host (projecao `sessionCost`) + cliente (bundle do navegador) | nenhuma |
 
 Os dois são **aditivos**: não alteram nenhuma funcionalidade existente do
 harness, só acrescentam uma entry no perfil web.
@@ -76,6 +77,13 @@ dsh-plugins/
 │   ├── .dev/                    # self-tests (host, cliente, navegador via CDP)
 │   ├── vendor/                  # (não versionado) dependências Python baixadas
 │   └── models/                  # (não versionado) modelos Whisper baixados
+├── session-cost/
+│   ├── install.sh               # copia para o perfil + registra a entry
+│   ├── lib/index.js             # metade host (projecao sessionCost: dobra o log e tarifa por horario)
+│   ├── lib/client.js            # metade cliente (linha de custo no rodape do composer)
+│   ├── package.json             # pacote dual-face (exports ./client + dsh.client)
+│   ├── README.md                # precos, configuracao, limites
+│   └── .dev/                    # self-test da conta e sonda de navegador
 └── ollama-vision/
     ├── install.sh               # copia para o perfil + registra a entry
     ├── index.js                 # plugin host-only (tools vision_ask / vision_warmup)
@@ -124,6 +132,13 @@ cd voice-input && node .dev/self-test.mjs    # transcrição de ponta a ponta (h
 node .dev/client-self-test.mjs               # lógica do botão sem navegador
 node .dev/browser-probe.mjs                  # o botão existe no DOM? tem erro no console?
 node .dev/browser-e2e.mjs                    # clique -> gravação -> POST -> texto na caixa de entrada
+```
+
+O session-cost se prova sem harness e depois no navegador:
+
+```bash
+cd session-cost && node .dev/self-test.mjs      # a conta em dolar, o horario de pico e a regra de substituicao
+node .dev/browser-probe.mjs                     # abre a pagina, entra na conversa e le a linha de custo no DOM
 ```
 
 Com o harness no ar, as rotas do voice-input respondem direto:
