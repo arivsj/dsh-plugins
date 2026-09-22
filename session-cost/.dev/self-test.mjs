@@ -4,10 +4,14 @@
  *   node .dev/self-test.mjs
  *
  * O que se prova aqui e a parte que pode mentir em silencio: a conta em dolar
- * (que depende do horario da amostra) e a regra de substituicao, que impede um
- * passo de ser contado duas vezes.
+ * (que depende do horario da amostra), a regra de substituicao (que impede um
+ * passo de ser contado duas vezes) e a LEITURA da tabela oficial — esta ultima
+ * contra o HTML de verdade guardado em `.dev/fixtures/precos.html`, sem rede.
  */
-import { ehPico, medir, minutosDe, definicao, Config } from '../lib/index.js'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ehPico, medir, minutosDe, definicao, Config, lerPrecos, precosEmVigor } from '../lib/index.js'
 
 let passaram = 0
 let falharam = 0
@@ -51,6 +55,7 @@ const emPico = medir(
   Date.UTC(2026, 8, 14, 2, 0),
   config,
   faixas,
+  [1, 2, 3, 4, 5],
 )
 check('pico cobra preco cheio', Math.abs(emPico.usd - 1.506) < 1e-9, emPico)
 
@@ -59,6 +64,7 @@ const foraPico = medir(
   Date.UTC(2026, 8, 14, 5, 0),
   config,
   faixas,
+  [1, 2, 3, 4, 5],
 )
 check('fora do pico custa metade', Math.abs(foraPico.usd - 0.753) < 1e-9, foraPico)
 
@@ -67,6 +73,7 @@ const escrita = medir(
   Date.UTC(2026, 8, 14, 2, 0),
   config,
   faixas,
+  [1, 2, 3, 4, 5],
 )
 check('escrita de cache entra pela tarifa sem cache', Math.abs(escrita.usd - 0.3) < 1e-9, escrita)
 
@@ -99,6 +106,46 @@ console.log('a projecao: dobra o log sem contar duas vezes')
   check('quadro sem uso nao muda o custo', comOutro === estado)
 
   check('a vista passa no esquema', unidade.schema.safeParse(unidade.view(estado)).success === true)
+}
+
+console.log('leitura da tabela oficial (fixture do site, sem rede)')
+{
+  const html = readFileSync(new URL('./fixtures/precos.html', import.meta.url), 'utf8')
+  const { modelos, precos } = lerPrecos(html)
+  check('achou os dois modelos do cabecalho',
+    modelos.includes('deepseek-flash') && modelos.includes('deepseek-v4-pro'), modelos)
+  const flash = precos['deepseek-flash'] ?? {}
+  check('flash: entrada com cache', flash.picoCacheHit === 0.006 && flash.foraCacheHit === 0.003, flash)
+  check('flash: entrada sem cache', flash.picoCacheMiss === 0.3 && flash.foraCacheMiss === 0.15, flash)
+  check('flash: saida', flash.picoSaida === 1.2 && flash.foraSaida === 0.6, flash)
+  check('pro: saida e outra', precos['deepseek-v4-pro']?.picoSaida === 3.96, precos['deepseek-v4-pro'])
+  const vazio = lerPrecos('<html><body><p>nada aqui</p></body></html>')
+  check('pagina sem tabela nao quebra', vazio.modelos.length === 0 && Object.keys(vazio.precos).length === 0, vazio)
+}
+
+console.log('a tabela em vigor: o que VOCE salva manda sobre a de fabrica')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'session-cost-'))
+  const caminho = join(dir, 'precos.json')
+  const config = new Config({ estadoPath: caminho })
+  check('sem arquivo, valem os de fabrica', precosEmVigor(config).origem === 'fabrica', precosEmVigor(config))
+
+  writeFileSync(caminho, JSON.stringify({
+    modelo: 'deepseek-v4-pro',
+    precos: { picoCacheHit: 0.044, picoCacheMiss: 1.32, picoSaida: 3.96, foraCacheHit: 0.022, foraCacheMiss: 0.66, foraSaida: 1.98 },
+    atualizadoEm: 1234,
+  }))
+  const vigor = precosEmVigor(config)
+  check('com arquivo, o do usuario manda', vigor.origem === 'usuario' && vigor.modelo === 'deepseek-v4-pro', vigor)
+  check('e traz quando foi atualizado', vigor.atualizadoEm === 1234, vigor.atualizadoEm)
+
+  // A conta passa a usar a tabela do usuario: 1M de saida no pico do pro = 3.96.
+  const conta = medir({ outputTokens: 1e6 }, Date.UTC(2026, 8, 14, 2, 0), vigor.precos, [[60, 240], [360, 600]], [1, 2, 3, 4, 5])
+  check('a conta usa a tabela atualizada', Math.abs(conta.usd - 3.96) < 1e-9, conta)
+
+  writeFileSync(caminho, '{ isso nao e json')
+  check('arquivo corrompido volta para os de fabrica', precosEmVigor(config).origem === 'fabrica')
+  rmSync(dir, { recursive: true, force: true })
 }
 
 console.log('')
