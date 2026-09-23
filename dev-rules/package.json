@@ -1,0 +1,22 @@
+{
+  "name": "dsh-dev-rules",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "description": "Regras do dev no prompt inicial do Harness: um texto que o usuario mantem, com as regras que valem em toda sessao (escolhidas na tela de Configuracoes).",
+  "license": "MIT"
+}

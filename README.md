@@ -12,8 +12,10 @@ dependências.
 | **[voice-input](voice-input/README.md)** | botão de microfone no composer: grava, transcreve em português com Whisper local e escreve o texto na caixa de entrada | barra interna do composer (slot `conversation.input.left`) | host (rotas HTTP) + cliente (bundle do navegador) | ffmpeg, faster-whisper (Python), modelo Whisper (75–464 MB) |
 | **[ollama-vision](ollama-vision/README.md)** | dá visão a modelos que só entendem texto: tools `vision_ask` / `vision_warmup` respondem perguntas sobre imagens | ferramentas do agente (sem UI própria) | só host | servidor Ollama + modelo de visão `gemma4:e2b` (7,2 GB) |
 | **[session-cost](session-cost/README.md)** | quanto a sessao custou, em US$, com preco por horario (pico e fora de pico) da API DeepSeek | rodape do composer (slot `conversation.composer.dock`) | host (projecao `sessionCost`) + cliente (bundle do navegador) | nenhuma |
+| **[pockethound](pockethound/README.md)** | controle do Harness pelo celular: transcricao ao vivo, aprovar e responder pergunta no telefone, mandar prompt | ponte HTTP no PC + app Android | host (ponte, aprovacoes, perguntas, projecoes) | nenhuma (o app e o PocketHound) |
+| **[dev-rules](dev-rules/README.md)** | poe as regras do dev no prompt inicial de toda sessao, com as escolhas na tela de Configuracoes | Configuracoes > Plugins > Configuracao de plugins | host (secao `dev:regras` no `systemPrompt`) + cliente (cartao de escolhas) | nenhuma |
 
-Os dois são **aditivos**: não alteram nenhuma funcionalidade existente do
+Todos são **aditivos**: não alteram nenhuma funcionalidade existente do
 harness, só acrescentam uma entry no perfil web.
 
 ## Requisitos gerais
@@ -22,8 +24,8 @@ Versões realmente testadas nesta máquina (Ubuntu 22.04, kernel 6.x):
 
 | componente | testado com | obrigatório para | observação |
 |---|---|---|---|
-| DSH | `0.1.0-rc.7` | os dois | precisa de slots de UI, rotas no webserver e plugins locais por perfil |
-| Node.js | `v22.23.1` (npm 10.9.8) | os dois | é o runtime do próprio DSH |
+| DSH | `0.1.0-rc.7` | todos | precisa de slots de UI, rotas no webserver e plugins locais por perfil |
+| Node.js | `v22.23.1` (npm 10.9.8) | todos | é o runtime do próprio DSH |
 | Python 3 | `3.10.12` | voice-input | só para o worker de transcrição |
 | ffmpeg | `4.4.2` | voice-input | converte o áudio gravado para WAV 16 kHz mono |
 | Ollama | `0.32.1` | ollama-vision | servidor em `127.0.0.1:11434` |
@@ -84,6 +86,14 @@ dsh-plugins/
 │   ├── package.json             # pacote dual-face (exports ./client + dsh.client)
 │   ├── README.md                # precos, configuracao, limites
 │   └── .dev/                    # self-test da conta e sonda de navegador
+├── pockethound/                # ponte para o app PocketHound (o app Android vive fora daqui)
+├── dev-rules/
+│   ├── install.sh               # copia para o perfil + registra a entry
+│   ├── lib/index.js             # metade host (secao dev:regras no prompt inicial)
+│   ├── lib/client.js            # metade cliente (cartao de escolhas em Configuracoes)
+│   ├── package.json             # pacote dual-face (exports ./client + dsh.client)
+│   ├── README.md                # catalogo, escolha, limites
+│   └── .dev/                    # self-tests (host com ctx falso + bundle no vm)
 └── ollama-vision/
     ├── install.sh               # copia para o perfil + registra a entry
     ├── index.js                 # plugin host-only (tools vision_ask / vision_warmup)
@@ -134,6 +144,20 @@ node .dev/browser-probe.mjs                  # o botão existe no DOM? tem erro 
 node .dev/browser-e2e.mjs                    # clique -> gravação -> POST -> texto na caixa de entrada
 ```
 
+O dev-rules se prova sem harness nenhum:
+
+```bash
+cd dev-rules && node .dev/host-test.mjs   # 24 provas: a secao, a escolha do dev, a rota
+node .dev/client-test.mjs                 # 10 provas: o cartao no slot certo, com a chave certa
+```
+
+O pockethound se prova sem celular nenhum:
+
+```bash
+cd pockethound && node .dev/self-test.mjs   # sobe a ponte de verdade e exercita o protocolo
+node .dev/host-test.mjs                     # o plugin montado no harness, com servicos de mentira
+```
+
 O session-cost se prova sem harness e depois no navegador:
 
 ```bash
@@ -148,6 +172,14 @@ curl -s http://127.0.0.1:3080/voice-input/status
 curl -s -X POST --data-binary @fala.webm -H 'content-type: audio/webm' \
   http://127.0.0.1:3080/voice-input/transcribe
 ```
+
+### O mesmo cuidado, agora também pelo plugin
+
+O `dev-rules` poe regras do dev no **prompt inicial** e deixa escolher quais valem na
+tela de Configuracoes. A regra deste repositorio (o bloco escrito em
+`$DSH_HOME/AGENTS.md` pelo `install-agent-rule.sh`) continua valendo: o que muda e
+onde o texto vive — no arquivo de instrucoes do agente ou numa secao do prompt
+mantida pelo plugin.
 
 ## O que não é versionado
 
