@@ -62,7 +62,7 @@ desligada por não estar numa lista velha.
             texto: 'Sempre me diga o que vai fazer antes de fazer.'
 ```
 
-## As três regras que vêm de fábrica
+## As regras que vêm de fábrica
 
 1. Todo `.md` que existe só por causa do contexto de desenvolvimento (notas de
    passagem, pendências, estado, diagnóstico da máquina) **não vai para o GitHub**
@@ -72,6 +72,13 @@ desligada por não estar numa lista velha.
    muita troca, ele manda fechar a rodada inteira (um commit por repositório/
    assunto), sem perguntar de novo, listando no fim o que foi para onde.
 3. Quando o dev fizer uma pergunta, **responder antes** de começar a escrever código.
+4. Arquivo de pendências ou similar (`PENDENCIAS.md`, TODOs do app em questão) só
+   guarda o que **ainda está pendente** — resolvido some do arquivo na hora; o
+   histórico mora nos commits.
+5. Quando uma tarefa que veio do `PENDENCIAS.md` **terminar**, apagá-la do arquivo
+   **na hora** — assim que fechar, antes de responder, sem esperar a próxima
+   sessão ou um novo pedido. A regra 4 mantém o arquivo limpo; esta faz o
+   trabalho devolver a limpeza sozinho.
 
 ## Rota de leitura
 

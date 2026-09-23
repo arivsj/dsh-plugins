@@ -51,6 +51,16 @@ const REGRAS_DE_FABRICA = [
     ligada: true,
     texto: 'Quando eu fizer uma pergunta, responda antes de comecar a escrever codigo.',
   },
+  {
+    id: 'pendencias-so-pendentes',
+    ligada: true,
+    texto: 'Arquivo de pendencias ou similar (PENDENCIAS.md, TODOs do app em questao) so deve conter o que AINDA esta pendente: resolvido some do arquivo na hora; o historico mora nos commits, nao aqui.',
+  },
+  {
+    id: 'pendencias-apagar-ao-terminar',
+    ligada: true,
+    texto: 'Quando uma tarefa que veio do PENDENCIAS.md (ou similar) terminar, apague-a do arquivo NA HORA - assim que fechar, antes de responder e sem esperar proxima sessao ou novo pedido.',
+  },
 ]
 
 /** Uma regra do catalogo. */
