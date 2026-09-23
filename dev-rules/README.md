@@ -67,8 +67,10 @@ desligada por não estar numa lista velha.
 1. Todo `.md` que existe só por causa do contexto de desenvolvimento (notas de
    passagem, pendências, estado, diagnóstico da máquina) **não vai para o GitHub**
    — a não ser que o dev peça explicitamente.
-2. **Nunca** fazer commit nem push sem perguntar antes; a autorização vale para um
-   commit só.
+2. **Nunca** fazer commit nem push sem perguntar antes — mas a autorização pode
+   ser de um commit, de **vários de uma vez**, ou de um **"suba tudo"**: depois de
+   muita troca, ele manda fechar a rodada inteira (um commit por repositório/
+   assunto), sem perguntar de novo, listando no fim o que foi para onde.
 3. Quando o dev fizer uma pergunta, **responder antes** de começar a escrever código.
 
 ## Rota de leitura

@@ -46,4 +46,8 @@ Quando eu pedir um plugin novo para o DeepSeek Harness:
   outro repositório — sem me perguntar antes e receber autorização explícita.
 - Na pergunta, mostre os arquivos que entrariam, um resumo de uma linha e a mensagem de commit
   sugerida. Vale também para alterações em plugins que já existem.
-- Autorização para um commit **não** vale para o próximo.
+- A autorização pode ser de um commit, de **vários de uma vez**, ou de um
+  **"suba tudo"** — quando ele vier depois de muita troca, faça **quantos commits
+  forem necessários** (um por repositório/assunto) para fechar aquelas interações,
+  sem perguntar de novo; no fim, liste o sha e o conteúdo de cada um. Fora desse
+  comando, um commit por autorização.

@@ -44,7 +44,7 @@ const REGRAS_DE_FABRICA = [
   {
     id: 'pedir-antes-de-publicar',
     ligada: true,
-    texto: 'Nunca faca commit nem push sem me perguntar antes; minha autorizacao vale para um commit so.',
+    texto: 'Nunca faca commit nem push sem me perguntar antes - mas eu posso autorizar um commit, VARIOS de uma vez, ou um "suba tudo": nesse caso, depois de muita troca, faca quantos commits forem necessarios (um por repositorio/assunto) ate fechar aquelas interacoes, sem perguntar de novo, e liste no final o que foi para onde.',
   },
   {
     id: 'responder-antes-de-codar',
