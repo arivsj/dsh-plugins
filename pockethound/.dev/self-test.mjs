@@ -118,6 +118,41 @@ await sleep(120)
 check('replay entregou o histórico', frames.length >= 2, frames.map((frame) => frame.type))
 check('replay entrega em ordem de seq', frames.every((frame, index) => index === 0 || frame.seq > frames[index - 1].seq), frames.map((frame) => frame.seq))
 
+console.log('fila ressincronizada em quem (re)conecta')
+
+/**
+ * Abre um stream novo e devolve o primeiro quadro de fila que chegar.
+ *
+ * A fila so viaja quando MUDA: sem a ressincronizacao do subscribe, quem
+ * entra depois — app reaberto, conexao refeita, Harness reiniciado (o
+ * contador aqui volta a zero) — fica com o numero velho na tela para sempre.
+ * Foi o "1 na fila" preso no celular com a fila vazia no PC.
+ *
+ * @returns {Promise<object|null>} o quadro de fila, ou null.
+ */
+async function filaAoConectar() {
+  const resposta = await fetch(base + '/stream?cursor=' + hub.seq, { headers: auth })
+  const leitor = resposta.body.getReader()
+  const decodificador = new TextDecoder()
+  let texto = ''
+  for (let i = 0; i < 30 && !texto.includes('inbox'); i += 1) {
+    const { value, done } = await leitor.read()
+    if (done) break
+    texto += decodificador.decode(value, { stream: true })
+  }
+  try { await leitor.cancel() } catch { /* stream ja fechado */ }
+  const linha = texto.split('\n').find((l) => l.startsWith('data: ') && l.includes('inbox'))
+  return linha ? JSON.parse(linha.slice(6)) : null
+}
+
+hub.publishTurnEvent('sess-1', { kind: 'inbox', inserted: 1, removed: 0 })
+const filaUm = await filaAoConectar()
+check('quem conecta agora recebe a fila atual', filaUm?.payload?.queued === 1, filaUm?.payload)
+
+hub.publishTurnEvent('sess-1', { kind: 'inbox', inserted: 0, removed: 1 })
+const filaZero = await filaAoConectar()
+check('e a fila ZERO tambem chega — e ela que apaga o numero velho', filaZero?.payload?.queued === 0, filaZero?.payload)
+
 console.log('aprovação decidida pelo celular')
 hub.setPhoneCount(1)
 const approvalPromise = hub.requestApproval({

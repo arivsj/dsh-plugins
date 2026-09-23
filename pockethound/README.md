@@ -213,6 +213,12 @@ Ambas falham rápido quando não há celular — nunca penduram o agente.
 - **A anel de replay é limitado** (`replayLimit`). Um cursor mais antigo que o
   anel recebe só o que ainda está lá — o app detecta pelo `seq` do primeiro
   quadro e refaz o snapshot.
+- **A fila é reenviada a cada assinatura.** Ela só viaja quando MUDA (evento do
+  Harness → quadro), então quem entra depois — app reaberto, conexão refeita,
+  Harness reiniciado, quando o contador daqui volta a zero — precisa do retrato
+  atual no `subscribe` (`Hub.#resyncQueues`), **inclusive o ZERO**, que é o que
+  apaga o número velho na tela. Sem isso o celular ficava preso em "1 na fila"
+  com a fila vazia no PC: nenhum evento futuro viria corrigir.
 
 ## Segurança
 

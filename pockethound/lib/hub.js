@@ -156,9 +156,34 @@ export class Hub {
     subscriber.cursor = this.seq
     this.subscribers.add(subscriber)
     this.publish(OUTBOUND.REPLAY_DONE, { from, delivered: this.seq - from })
+    this.#resyncQueues()
     return {
       cursor: subscriber.cursor,
       close: () => { this.subscribers.delete(subscriber) },
+    }
+  }
+
+  /**
+   * Reenvia o TAMANHO da fila de cada sessao para quem acabou de chegar.
+   *
+   * A fila so viaja quando MUDA: evento do Harness vira quadro, e fila que nao
+   * muda nao gera evento nenhum. Quem perdia a ultima mudanca — app fechado,
+   * conexao caida, Harness reiniciado no meio (o contador daqui volta a zero) —
+   * ficava com o numero velho na tela para sempre, sem nenhum quadro futuro
+   * capaz de corrigi-lo. Era o "1 na fila" preso no celular com a fila vazia no
+   * PC.
+   *
+   * O numero e absoluto (ver this.queues), entao repetir nao soma nada: so
+   * devolve a verdade a quem chegou agora. Sessoes com fila ZERO vao junto, e
+   * sao justamente as que mais importam — sao elas que apagam o numero velho.
+   */
+  #resyncQueues() {
+    for (const id of this.sessions.keys()) {
+      this.publish(
+        OUTBOUND.TURN_EVENT,
+        { kind: 'inbox', queued: this.queues.get(id) ?? 0, sessionId: id },
+        id,
+      )
     }
   }
 
