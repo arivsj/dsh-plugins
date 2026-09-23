@@ -415,10 +415,19 @@ export class Hub {
    */
   withdrawApproval(requestId, outcome, by = 'desktop') {
     const entry = this.pendingApprovals.get(String(requestId ?? ''))
-    if (!entry) return false
-    this.#rememberDecision(String(requestId), outcome === 'allowed-once' ? 'allowed-once' : 'rejected')
-    entry.settle(outcome, by)
-    return true
+    if (entry) {
+      this.#rememberDecision(String(requestId), outcome === 'allowed-once' ? 'allowed-once' : 'rejected')
+      entry.settle(outcome, by)
+      return true
+    }
+    // Mesmo motivo do withdrawQuestion: sem entry o settle nunca roda, o
+    // approval.resolved nunca sai e o desk guarda o pedido como pendente para
+    // sempre — fila que mente. Publica mesmo assim.
+    this.publish(
+      OUTBOUND.APPROVAL_RESOLVED,
+      { requestId: String(requestId ?? ''), outcome, by },
+    )
+    return false
   }
 
   /**
@@ -535,10 +544,18 @@ export class Hub {
    */
   withdrawQuestion(requestId, by = 'desktop') {
     const entry = this.pendingQuestions.get(String(requestId ?? ''))
-    if (!entry) return false
-    entry.resolve(null)
-    this.publish(OUTBOUND.QUESTION_RESOLVED, { requestId: String(requestId), by }, entry.sessionId)
-    return true
+    if (entry) entry.resolve(null)
+    // Publica MESMO sem entry: um entry já morto (prazo, estado perdido no meio
+    // do caminho) não pode ser motivo de o resolved nunca sair — foi assim que o
+    // desk ficou com uma pergunta "pendente" para sempre, reenviada a cada
+    // celular que reconectava (o zumbi de campo). A fila que mente é o pior
+    // desfecho; id que ninguém conhece é só um delete que não acha nada.
+    this.publish(
+      OUTBOUND.QUESTION_RESOLVED,
+      { requestId: String(requestId ?? ''), by },
+      entry?.sessionId,
+    )
+    return Boolean(entry)
   }
 
   /**
@@ -548,7 +565,14 @@ export class Hub {
    */
   answerQuestion(input) {
     const entry = this.pendingQuestions.get(input.requestId)
-    if (!entry) return { ok: false, error: 'unknown-request' }
+    if (!entry) {
+      // O entry já morreu, mas o DESK pode ainda guardar a pergunta (o dele só
+      // apaga no resolved que nunca chegou). Publicar aqui é o que FECHA o
+      // zumbi: o toque do celular no cartão velho limpa o desk, o celular e a
+      // bandeja de uma vez — em vez de um erro silencioso com a fila mentindo.
+      this.publish(OUTBOUND.QUESTION_RESOLVED, { requestId: String(input.requestId), by: 'phone' })
+      return { ok: false, error: 'unknown-request' }
+    }
     entry.resolve(input.answers ?? [])
     // Publica a resolucao TAMBEM quando quem respondeu foi o celular: sem isto a
     // pergunta resolvida nao chega aos outros clientes, e o cartao continua

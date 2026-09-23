@@ -164,6 +164,15 @@ harness: vira `next()`.
 **Decisão que não trava a sessão:** o prazo é sempre finito e o `abort` do turno
 retira a pergunta do celular na hora.
 
+**Resolução publicada mesmo sem entry:** `withdrawQuestion`, `withdrawApproval`
+e a resposta para `unknown-request` publicam o `*.resolved` mesmo quando o
+pendente já morreu no hub. Um resolved engolido é o que deixa o **desk** com o
+pedido "pendente" para sempre — e o desk reenvia esse pedido a **cada celular
+que reconecta** (`seq: 0`, fora de qualquer marca), ressuscitando cartão e
+notificação que já tinham sido respondidos (o zumbi de 22/set). Entry queninguém
+conhece é só um delete que não acha nada: o pior desfecho seria a fila que
+mente.
+
 ## Sessões vivas e sessões frias
 
 `GET /sessions` devolve **as duas coisas**: o que está rodando agora (`status:
