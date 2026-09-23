@@ -213,7 +213,16 @@ function apply(ctx, config) {
       // mantem. Ler em vez de recalcular aqui e o que garante que o celular
       // mostre o MESMO numero do navegador — o preco por horario (pico e fora de
       // pico) fica num lugar so, no plugin session-cost.
-      if (payload.kind === 'text.done' || payload.kind === 'turn.end') {
+      // O retrato tambem sai no `todo.write` (o plano aparece na hora, e nao so no
+      // fim do passo) e no `turn.start` (que ZERA o plano - o painel do celular
+      // precisa saber disso na mesma hora, senao fica mostrando o plano do turno
+      // anterior).
+      if (
+        payload.kind === 'text.done' ||
+        payload.kind === 'turn.end' ||
+        payload.kind === 'todo.write' ||
+        payload.kind === 'turn.start'
+      ) {
         const retrato = retratoDaSessao(ctx, session)
         if (retrato) hub.publishTurnEvent(id, retrato)
       }
@@ -741,7 +750,11 @@ function retratoDaSessao(ctx, session) {
     const custo = values?.sessionCost
     const uso = values?.tokenUsage
     const pressao = values?.contextPressure
-    if (!custo && !uso && !pressao) return null
+    // O PLANO do turno: a mesma projecao `todos` que o harness desenha no
+    // navegador (dsh-tool-todo). Ela e zerada a cada `turn/start`, entao o que
+    // chega aqui e o plano do turno EM CURSO - nao um acumulado da sessao.
+    const plano = values?.todos
+    if (!custo && !uso && !pressao && !plano) return null
     const entrada = (uso?.uncachedInputTokens ?? 0) + (uso?.cacheReadTokens ?? 0) + (uso?.cacheWriteTokens ?? 0)
     return {
       kind: 'stats',
@@ -762,6 +775,16 @@ function retratoDaSessao(ctx, session) {
         ? pressao.projectedTokens
         : (Number.isFinite(pressao?.pressureTokens) ? pressao.pressureTokens : undefined),
       contextoJanela: Number.isFinite(pressao?.contextWindow) ? pressao.contextWindow : undefined,
+      // Lista INTEIRA, sempre - e nao 'so quando muda': lista vazia significa
+      // 'sem plano agora' (o harness zera no comeco do turno), e e isso que
+      // apaga o painel do celular. Um nulo nao serviria: o app nao teria como
+      // distinguir 'nao veio' de 'nao ha'.
+      todos: Array.isArray(plano)
+        ? plano.map((item) => ({
+            content: String(item?.content ?? ''),
+            status: String(item?.status ?? 'pending'),
+          }))
+        : [],
     }
   } catch (error) {
     // Degrada em silencio: o retrato e enfeite de rodape e nao pode derrubar o
@@ -975,4 +998,4 @@ function defineAskTool(defineTool, hub, ctx) {
   })
 }
 
-export { Config, apply, inject, name }
+export { Config, apply, inject, name, retratoDaSessao }

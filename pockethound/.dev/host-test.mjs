@@ -135,6 +135,12 @@ const servicos = {
         sessionCost: { modelo: 'deepseek-flash', usd: 1.506, usdPico: 1.506, amostras: 3 },
         tokenUsage: { uncachedInputTokens: 1000, outputTokens: 2000, cacheReadTokens: 3000, cacheWriteTokens: 0 },
         contextPressure: { pressureTokens: 900, projectedTokens: 1200, contextWindow: 100000 },
+        // O plano do turno (projecao `todos`, do dsh-tool-todo): a MESMA lista
+        // que o harness desenha no navegador. O celular mostra num painel.
+        todos: [
+          { content: 'Ler o contrato da casa', status: 'completed' },
+          { content: 'Escrever o plugin', status: 'in_progress' },
+        ],
       },
     }),
   },
@@ -355,7 +361,40 @@ console.log('custo e contexto vao para o celular, lidos das projecoes')
     retrato?.payload,
   )
   check('o retrato vai marcado com a sessao', retrato?.session === 'sess-viva', retrato?.session)
+  check(
+    'e leva o PLANO do turno (o to-do que o app mostra)',
+    retrato?.payload?.todos?.length === 2 &&
+      retrato.payload.todos[0].status === 'completed' &&
+      retrato.payload.todos[1].content === 'Escrever o plugin',
+    retrato?.payload?.todos,
+  )
 }
+
+console.log('o plano sai no retrato e o turno novo tambem publica')
+{
+  const antesDoPlano = quadros.length
+  eventos['session/event'](
+    { id: 'sess-viva', events: [], header: {} },
+    { type: 'todo/write', time: Date.now(), data: { todos: [{ content: 'x', status: 'pending' }] } },
+  )
+  await sleep(150)
+  const depoisDoPlano = quadros.slice(antesDoPlano)
+  const comPlano = depoisDoPlano.find((q) => q.type === 'turn.event' && q.payload?.kind === 'stats')
+  check('o todo.write publica o retrato', Boolean(comPlano), depoisDoPlano.map((q) => q.type + ':' + (q.payload?.kind ?? '')))
+  check('e o retrato leva o plano da projecao', comPlano?.payload?.todos?.length === 2, comPlano?.payload?.todos)
+
+  // O turno novo zera o plano NO HARNESS; aqui a projecao falsa e estatica, e o
+  // que se prova e o caminho: o turno novo tambem publica o retrato.
+  const antesDoTurno = quadros.length
+  eventos['session/event'](
+    { id: 'sess-viva', events: [], header: {} },
+    { type: 'turn/start', time: Date.now(), data: { turn: 2 } },
+  )
+  await sleep(150)
+  const doTurno = quadros.slice(antesDoTurno).find((q) => q.type === 'turn.event' && q.payload?.kind === 'stats')
+  check('o turno novo tambem publica o retrato', Boolean(doTurno), quadros.slice(antesDoTurno).map((q) => q.type + ':' + (q.payload?.kind ?? '')))
+}
+
 
 // A tela do PC (next) recebe a MESMA pergunta e fica esperando o humano — que e
 // o que o respondente normal do harness faz. Modelar isso importa: com um next()

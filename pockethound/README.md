@@ -40,9 +40,16 @@ projeções que o Harness já mantém e publica o retrato (`stats`) para o celul
 |---|---|---|
 | projeção `sessionCost` | plugin [`session-cost`](../session-cost) | o rodapé do celular não mostra o valor em US$ (o resto funciona igual) |
 | projeção `contextPressure` | `@deepseek-ai/dsh-token-meter`, do próprio Harness | o rodapé não mostra a porcentagem de contexto |
+| projeção `todos` | `@deepseek-ai/dsh-tool-todo`, do próprio Harness | o app não mostra o painel de tarefas do turno |
 
 Ler em vez de recalcular é o que garante que o celular e o navegador mostrem o
 **mesmo número** — a tabela de preço (e a janela de pico) fica num arquivo só.
+
+O plano do turno viaja no MESMO retrato, no campo `todos` (lista inteira, sempre —
+vazia quer dizer "sem plano agora", porque o Harness zera a projeção a cada início
+de turno). O retrato é publicado no fim do passo (`text.done`/`turn.end`), mas
+também no `todo.write` (o painel aparece na hora em que o agente escreve o plano)
+e no `turn.start` (que apaga o plano do turno anterior no celular).
 
 Para instalar tudo de uma vez: `cd .. && ./install-all.sh`.
 
